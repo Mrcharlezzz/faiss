@@ -11,6 +11,7 @@
 #include <cinttypes>
 #include <cstddef>
 #include <cstdlib>
+#include <limits>
 #include <type_traits>
 
 #include <faiss/IndexHNSW.h>
@@ -767,6 +768,7 @@ HNSWStats greedy_update_nearest_impl(
         // update stats
         stats.ndis += ndis;
         stats.nhops += 1;
+        stats.ndis_upper += ndis;
 
         if (nearest == prev_nearest) {
             return stats;
@@ -1233,6 +1235,10 @@ int search_from_candidates_fixVT(
         }
         stats.ndis += ndis;
         stats.nhops += nstep;
+    } else {
+        stats.ndis += ndis;
+        stats.nhops += nstep;
+        stats.ndis_upper += ndis;
     }
 
     return nres;
@@ -1568,10 +1574,12 @@ void reservePriorityQueue(
 /// Templated body of `search_from_candidate_unbounded`. The choice of
 /// max-heap vs min-heap for both `top_candidates` and `candidates` is
 /// derived from C via `TopCandidatesQueue` / `CandidatesQueue`.
+/// nodes must be sorted nearest first.
 template <typename VTType, class C>
 TopCandidatesQueue<C> search_from_candidate_unbounded_fixVT(
         const HNSW& hnsw,
-        const HNSW::Node& node,
+        const HNSW::Node* nodes,
+        size_t n,
         DistanceComputer& qdis,
         int ef,
         VTType& vt,
@@ -1581,12 +1589,15 @@ TopCandidatesQueue<C> search_from_candidate_unbounded_fixVT(
     reservePriorityQueue(top_candidates, ef);
 
     CandidatesQueue<C> candidates;
-    reservePriorityQueue(candidates, ef);
+    reservePriorityQueue(candidates, std::max(size_t(ef), n));
 
-    top_candidates.push(node);
-    candidates.push(node);
-
-    vt.set(node.second);
+    for (size_t i = 0; i < n; i++) {
+        if (i < static_cast<size_t>(ef)) {
+            top_candidates.push(nodes[i]);
+        }
+        candidates.push(nodes[i]);
+        vt.set(nodes[i].second);
+    }
 
     while (!candidates.empty()) {
         float d0;
@@ -1693,7 +1704,7 @@ std::priority_queue<HNSW::Node> hnsw_detail::search_from_candidate_unbounded(
     using C = HNSW::C_distance;
     auto call = [&]<typename VTType>(VTType& vt_concrete) {
         return search_from_candidate_unbounded_fixVT<VTType, C>(
-                hnsw, node, qdis, ef, vt_concrete, stats);
+                hnsw, &node, 1, qdis, ef, vt_concrete, stats);
     };
     if (VisitedTableVector* vtv = dynamic_cast<VisitedTableVector*>(vt)) {
         return call(*vtv);
@@ -1703,6 +1714,39 @@ std::priority_queue<HNSW::Node> hnsw_detail::search_from_candidate_unbounded(
 }
 
 namespace {
+
+/// 1 (greedy) when the schedule has no entry for the level
+int upper_level_ef(const std::vector<int>* efSearch_by_level, int level) {
+    if (efSearch_by_level &&
+        static_cast<size_t>(level) < efSearch_by_level->size()) {
+        return (*efSearch_by_level)[level];
+    }
+    return 1;
+}
+
+void record_level(
+        HNSWQueryStats& query_stats,
+        int level,
+        const std::vector<HNSW::storage_idx_t>& eps,
+        const std::vector<float>& ep_dis,
+        const HNSWStats& stats_before,
+        const HNSWStats& stats_after) {
+    const int* lo = query_stats.level_offsets;
+    size_t cap = lo[level + 1] - lo[level];
+    size_t n = std::min(cap, eps.size());
+    int32_t* out_ids = query_stats.level_eps + lo[level];
+    float* out_dis = query_stats.level_ep_dis + lo[level];
+    for (size_t j = 0; j < n; j++) {
+        out_ids[j] = eps[j];
+        out_dis[j] = ep_dis[j];
+    }
+    for (size_t j = n; j < cap; j++) {
+        out_ids[j] = -1;
+        out_dis[j] = std::numeric_limits<float>::infinity();
+    }
+    query_stats.ndis[level] = stats_after.ndis - stats_before.ndis;
+    query_stats.nhops[level] = stats_after.nhops - stats_before.nhops;
+}
 
 // just used as a lower bound for the minmaxheap, but it is set for heap search
 template <class C>
@@ -1715,13 +1759,80 @@ int extract_k_from_ResultHandler(ResultHandler& res) {
 }
 
 template <class C>
+struct TopResultHandler : ResultHandlerT<C> {
+    size_t ef;
+    size_t nres = 0;
+    std::vector<float> dis; // heap, worst on top
+    std::vector<idx_t> ids;
+
+    explicit TopResultHandler(size_t ef) : ef(ef), dis(ef), ids(ef) {}
+
+    bool add_result(float d, idx_t id) override {
+        if (!C::cmp(this->threshold, d)) {
+            return false;
+        }
+        if (nres < ef) {
+            nres++;
+            heap_push<C>(nres, dis.data(), ids.data(), d, id);
+            if (nres == ef) {
+                this->threshold = dis[0];
+            }
+        } else {
+            heap_replace_top<C>(ef, dis.data(), ids.data(), d, id);
+            this->threshold = dis[0];
+        }
+        return true;
+    }
+
+    void get_sorted(
+            std::vector<storage_idx_t>& out_ids,
+            std::vector<float>& out_dis) {
+        heap_reorder<C>(nres, dis.data(), ids.data());
+        out_ids.assign(ids.begin(), ids.begin() + nres);
+        out_dis.assign(dis.begin(), dis.begin() + nres);
+    }
+};
+
+/// eps / ep_dis: seeds in, the ef best found out, sorted nearest first.
+template <class C>
+void beam_search_level(
+        const HNSW& hnsw,
+        DistanceComputer& qdis,
+        int level,
+        int ef,
+        bool do_dis_check,
+        std::vector<storage_idx_t>& eps,
+        std::vector<float>& ep_dis,
+        VisitedTable& vt,
+        HNSWStats& stats) {
+    // no IDSelector on upper levels, as in greedy search
+    SearchParametersHNSW level_params;
+    level_params.efSearch = ef;
+    level_params.check_relative_distance = do_dis_check;
+
+    MinimaxHeapT<HC_for<C>> candidates(
+            std::max(ef, static_cast<int>(eps.size())));
+    for (size_t i = 0; i < eps.size(); i++) {
+        candidates.push(eps[i], ep_dis[i]);
+    }
+
+    TopResultHandler<C> top(ef);
+    search_from_candidates_dispatch<C>(
+            hnsw, qdis, top, candidates, vt, stats, level, 0, &level_params);
+    vt.advance();
+
+    top.get_sorted(eps, ep_dis);
+}
+
+template <class C>
 HNSWStats search_impl(
         const HNSW& hnsw,
         DistanceComputer& qdis,
         const IndexHNSW* index,
         ResultHandler& res,
         VisitedTable& vt,
-        const SearchParameters* params) {
+        const SearchParameters* params,
+        HNSWQueryStats* query_stats) {
     HNSWStats stats;
     if (hnsw.entry_point == -1) {
         return stats;
@@ -1729,30 +1840,59 @@ HNSWStats search_impl(
     int k = extract_k_from_ResultHandler<C>(res);
 
     bool bounded_queue = hnsw.search_bounded_queue;
+    bool do_dis_check = hnsw.check_relative_distance;
     int cur_efSearch = hnsw.efSearch;
+    const std::vector<int>* efSearch_by_level = nullptr;
     if (params) {
         if (const SearchParametersHNSW* hnsw_params =
                     dynamic_cast<const SearchParametersHNSW*>(params)) {
             bounded_queue = hnsw_params->bounded_queue;
+            do_dis_check = hnsw_params->check_relative_distance;
             cur_efSearch = hnsw_params->efSearch;
+            efSearch_by_level = &hnsw_params->efSearch_by_level;
         }
     }
 
-    //  greedy search on upper levels
-    storage_idx_t nearest = hnsw.entry_point;
-    float d_nearest = qdis(nearest);
+    std::vector<storage_idx_t> eps = {hnsw.entry_point};
+    std::vector<float> ep_dis = {qdis(hnsw.entry_point)};
 
     for (int level = hnsw.max_level; level >= 1; level--) {
-        HNSWStats local_stats = greedy_update_nearest_impl<C>(
-                hnsw, qdis, level, nearest, d_nearest);
-        stats.combine(local_stats);
+        int ef_level = upper_level_ef(efSearch_by_level, level);
+        HNSWStats stats_before = stats;
+        if (ef_level <= 1) {
+            storage_idx_t nearest = eps[0];
+            float d_nearest = ep_dis[0];
+            HNSWStats local_stats = greedy_update_nearest_impl<C>(
+                    hnsw, qdis, level, nearest, d_nearest);
+            stats.combine(local_stats);
+            eps.assign(1, nearest);
+            ep_dis.assign(1, d_nearest);
+        } else {
+            beam_search_level<C>(
+                    hnsw,
+                    qdis,
+                    level,
+                    ef_level,
+                    do_dis_check,
+                    eps,
+                    ep_dis,
+                    vt,
+                    stats);
+        }
+        if (query_stats) {
+            record_level(*query_stats, level, eps, ep_dis, stats_before, stats);
+        }
     }
 
+    HNSWStats stats_before_level_0 = stats;
     int ef = std::max(cur_efSearch, k);
     if (bounded_queue) {
-        MinimaxHeapT<HC_for<C>> candidates(ef);
+        MinimaxHeapT<HC_for<C>> candidates(
+                std::max(ef, static_cast<int>(eps.size())));
 
-        candidates.push(nearest, d_nearest);
+        for (size_t i = 0; i < eps.size(); i++) {
+            candidates.push(eps[i], ep_dis[i]);
+        }
 
         switch (hnsw.search_method) {
             case HNSW::SM_DEFAULT:
@@ -1792,10 +1932,15 @@ HNSWStats search_impl(
                 hnsw.search_method == HNSW::SM_DEFAULT ||
                         hnsw.search_method == HNSW::SM_PANORAMA,
                 "invalid HNSW search method");
+        std::vector<HNSW::Node> seeds(eps.size());
+        for (size_t i = 0; i < eps.size(); i++) {
+            seeds[i] = HNSW::Node(ep_dis[i], eps[i]);
+        }
         auto call = [&]<typename VTType>(VTType& vt_concrete) {
             return search_from_candidate_unbounded_fixVT<VTType, C>(
                     hnsw,
-                    HNSW::Node(d_nearest, nearest),
+                    seeds.data(),
+                    seeds.size(),
                     qdis,
                     ef,
                     vt_concrete,
@@ -1823,6 +1968,11 @@ HNSWStats search_impl(
     }
 
     vt.advance();
+
+    if (query_stats) {
+        query_stats->ndis[0] = stats.ndis - stats_before_level_0.ndis;
+        query_stats->nhops[0] = stats.nhops - stats_before_level_0.nhops;
+    }
 
     return stats;
 }
@@ -1940,11 +2090,78 @@ HNSWStats HNSW::search(
         const IndexHNSW* index,
         ResultHandler& res,
         VisitedTable& vt,
-        const SearchParameters* params) const {
+        const SearchParameters* params,
+        HNSWQueryStats* query_stats) const {
     if (is_similarity) {
-        return search_impl<C_similarity>(*this, qdis, index, res, vt, params);
+        return search_impl<C_similarity>(
+                *this, qdis, index, res, vt, params, query_stats);
     }
-    return search_impl<C_distance>(*this, qdis, index, res, vt, params);
+    return search_impl<C_distance>(
+            *this, qdis, index, res, vt, params, query_stats);
+}
+
+/**************************************************************
+ * Per-query, per-level stats
+ **************************************************************/
+
+HNSWPerQueryStats hnsw_per_query_stats;
+
+void HNSWPerQueryStats::reset() {
+    nq = 0;
+    L = 0;
+    S = 0;
+    level_offsets.clear();
+    level_eps.clear();
+    level_ep_dis.clear();
+    ndis.clear();
+    nhops.clear();
+}
+
+void HNSWPerQueryStats::add(
+        size_t n,
+        const std::vector<int>& new_level_offsets,
+        const int32_t* new_level_eps,
+        const float* new_level_ep_dis,
+        const int64_t* new_ndis,
+        const int64_t* new_nhops) {
+    FAISS_THROW_IF_NOT(!new_level_offsets.empty());
+    if (level_offsets.empty()) {
+        level_offsets = new_level_offsets;
+        L = static_cast<int>(level_offsets.size()) - 1;
+        S = level_offsets.back();
+    } else {
+        FAISS_THROW_IF_NOT_MSG(
+                level_offsets == new_level_offsets,
+                "hnsw_per_query_stats: level layout (max_level or "
+                "efSearch_by_level) differs from the stored rows, "
+                "call reset() first");
+    }
+    level_eps.insert(level_eps.end(), new_level_eps, new_level_eps + n * S);
+    level_ep_dis.insert(
+            level_ep_dis.end(), new_level_ep_dis, new_level_ep_dis + n * S);
+    ndis.insert(ndis.end(), new_ndis, new_ndis + n * L);
+    nhops.insert(nhops.end(), new_nhops, new_nhops + n * L);
+    nq += n;
+}
+
+std::vector<int> hnsw_level_offsets(
+        int max_level,
+        const SearchParameters* params) {
+    const std::vector<int>* efSearch_by_level = nullptr;
+    if (params) {
+        if (const SearchParametersHNSW* hnsw_params =
+                    dynamic_cast<const SearchParametersHNSW*>(params)) {
+            efSearch_by_level = &hnsw_params->efSearch_by_level;
+        }
+    }
+    std::vector<int> level_offsets(1, 0);
+    for (int level = 0; level <= max_level; level++) {
+        int cap = level == 0
+                ? 0
+                : std::max(1, upper_level_ef(efSearch_by_level, level));
+        level_offsets.push_back(level_offsets.back() + cap);
+    }
+    return level_offsets;
 }
 
 void HNSW::search_level_0(
