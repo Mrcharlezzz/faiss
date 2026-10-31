@@ -424,24 +424,15 @@ void hnsw_search(
             efSearch = hnsw_params->efSearch;
         }
     }
-    size_t n1 = 0, n2 = 0, ndis = 0, nhops = 0, ndis_upper = 0;
+    size_t n1 = 0, n2 = 0, ndis = 0, nhops = 0;
     size_t n_rabitq_1bit = 0, n_rabitq_refine = 0;
 
-    const bool record_queries = hnsw_per_query_stats.enabled;
-    std::vector<int> level_offsets;
-    std::vector<int32_t> q_level_eps;
-    std::vector<float> q_level_ep_dis;
-    std::vector<int64_t> q_ndis, q_nhops;
-    size_t S = 0, L = 0;
-    if (record_queries) {
-        level_offsets = hnsw_level_offsets(hnsw.max_level, params);
-        L = level_offsets.size() - 1;
-        S = level_offsets.back();
-        q_level_eps.resize(n * S, -1);
-        q_level_ep_dis.resize(n * S, std::numeric_limits<float>::infinity());
-        q_ndis.resize(n * L, 0);
-        q_nhops.resize(n * L, 0);
-    }
+    HNSWLevelStats* level_stats =
+            hnsw_level_stats.enabled ? &hnsw_level_stats : nullptr;
+    size_t row0 = level_stats
+            ? level_stats->add_rows(
+                      n, hnsw_level_offsets(hnsw.max_level, params))
+            : 0;
 
     idx_t check_period = InterruptCallback::get_period_hint(
             hnsw.max_level * index->d * efSearch);
@@ -467,8 +458,9 @@ void hnsw_search(
                 omp_capture_exception(ex, [&] { interrupt = true; });
             }
 
-#pragma omp for reduction(+ : n1, n2, ndis, nhops, ndis_upper) \
-        reduction(+ : n_rabitq_1bit, n_rabitq_refine) schedule(guided)
+#pragma omp for reduction(                                               \
+                + : n1, n2, ndis, nhops, n_rabitq_1bit, n_rabitq_refine) \
+        schedule(guided)
             for (idx_t i = i0; i < i1; i++) {
                 if (interrupt.load(std::memory_order_relaxed)) {
                     continue;
@@ -481,27 +473,18 @@ void hnsw_search(
                         rq->stats.reset();
                     }
 
-                    HNSWQueryStats query_stats;
-                    if (record_queries) {
-                        query_stats.level_offsets = level_offsets.data();
-                        query_stats.level_eps = q_level_eps.data() + i * S;
-                        query_stats.level_ep_dis =
-                                q_level_ep_dis.data() + i * S;
-                        query_stats.ndis = q_ndis.data() + i * L;
-                        query_stats.nhops = q_nhops.data() + i * L;
-                    }
                     HNSWStats stats = hnsw.search(
                             *dis,
                             index,
                             *res,
                             *vt,
                             params,
-                            record_queries ? &query_stats : nullptr);
+                            level_stats,
+                            row0 + i);
                     n1 += stats.n1;
                     n2 += stats.n2;
                     ndis += stats.ndis;
                     nhops += stats.nhops;
-                    ndis_upper += stats.ndis_upper;
                     if (rq) {
                         n_rabitq_1bit += rq->stats.n_1bit;
                         n_rabitq_refine += rq->stats.n_refine;
@@ -517,17 +500,8 @@ void hnsw_search(
         InterruptCallback::check();
     }
 
-    hnsw_stats.combine({n1, n2, ndis, nhops, ndis_upper});
+    hnsw_stats.combine({n1, n2, ndis, nhops});
     rabitq_stats.add({n_rabitq_1bit, n_rabitq_refine});
-    if (record_queries) {
-        hnsw_per_query_stats.add(
-                n,
-                level_offsets,
-                q_level_eps.data(),
-                q_level_ep_dis.data(),
-                q_ndis.data(),
-                q_nhops.data());
-    }
 }
 
 } // anonymous namespace

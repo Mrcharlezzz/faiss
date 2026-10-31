@@ -34,10 +34,20 @@ def decay_schedule(ef0, r, max_level):
 
 
 def search_with_stats(index, xq, k, params):
+    """Returns D, I, ndis, the distances on levels >= 1, and nhops."""
     stats = faiss.cvar.hnsw_stats
     stats.reset()
-    D, I = index.search(xq, k, params=params)
-    return D, I, stats.ndis, stats.ndis_upper, stats.nhops
+    level_stats = faiss.cvar.hnsw_level_stats
+    level_stats.enabled = True
+    try:
+        level_stats.reset()
+        D, I = index.search(xq, k, params=params)
+    finally:
+        level_stats.enabled = False
+    ndis = faiss.vector_to_array(level_stats.ndis)
+    ndis = ndis.reshape(level_stats.nq, level_stats.L)
+    ndis_upper = int(ndis[:, 1:].sum())
+    return D, I, stats.ndis, ndis_upper, stats.nhops
 
 
 def exhaustive_descent(index, xb, xq):
@@ -129,11 +139,8 @@ class TestHNSWPerLayerEfSearch(unittest.TestCase):
         index, xq, k = self.index, self.xq, self.k
         for ef0 in 16, 64:
             index.hnsw.efSearch = ef0
-            stats = faiss.cvar.hnsw_stats
-            stats.reset()
-            Dref, Iref = index.search(xq, k)
-            ref = (stats.ndis, stats.ndis_upper, stats.nhops)
-            self.assertGreater(stats.ndis_upper, 0)
+            Dref, Iref, *ref = search_with_stats(index, xq, k, None)
+            self.assertGreater(ref[1], 0)
             for schedule in (
                 None,
                 [ef0] + [1] * self.max_level,
@@ -146,7 +153,7 @@ class TestHNSWPerLayerEfSearch(unittest.TestCase):
                 )
                 np.testing.assert_array_equal(I, Iref)
                 np.testing.assert_array_equal(D, Dref)
-                self.assertEqual(tuple(counts), ref)
+                self.assertEqual(counts, ref)
         index.hnsw.efSearch = 16
 
     def test_exhaustive_descent(self):
@@ -277,10 +284,10 @@ class TestHNSWPerLayerEfSearchIP(unittest.TestCase):
         self.assertGreater(recall, 0.8)
 
 
-def record_per_query_stats(index, xq, k, params):
-    """search with hnsw_per_query_stats enabled. Returns D, I and the
+def record_level_stats(index, xq, k, params):
+    """search with hnsw_level_stats enabled. Returns D, I and the
     recorded columns, reshaped per query."""
-    s = faiss.cvar.hnsw_per_query_stats
+    s = faiss.cvar.hnsw_level_stats
     s.enabled = True
     try:
         s.reset()
@@ -297,7 +304,7 @@ def record_per_query_stats(index, xq, k, params):
     return D, I, rec
 
 
-class TestHNSWPerQueryStats(unittest.TestCase):
+class TestHNSWLevelStats(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
@@ -325,7 +332,7 @@ class TestHNSWPerQueryStats(unittest.TestCase):
         }
 
     def tearDown(self):
-        s = faiss.cvar.hnsw_per_query_stats
+        s = faiss.cvar.hnsw_level_stats
         s.enabled = False
         s.reset()
 
@@ -343,13 +350,13 @@ class TestHNSWPerQueryStats(unittest.TestCase):
             params = make_params(32, schedule)
             hs.reset()
             Dref, Iref = index.search(xq, k, params=params)
-            ref = (hs.n1, hs.n2, hs.ndis, hs.ndis_upper, hs.nhops)
+            ref = (hs.n1, hs.n2, hs.ndis, hs.nhops)
             hs.reset()
-            D, I, _ = record_per_query_stats(index, xq, k, params)
+            D, I, _ = record_level_stats(index, xq, k, params)
             np.testing.assert_array_equal(I, Iref)
             np.testing.assert_array_equal(D, Dref)
             self.assertEqual(
-                (hs.n1, hs.n2, hs.ndis, hs.ndis_upper, hs.nhops), ref
+                (hs.n1, hs.n2, hs.ndis, hs.nhops), ref
             )
 
     def test_counts_sum_to_hnsw_stats(self):
@@ -357,13 +364,12 @@ class TestHNSWPerQueryStats(unittest.TestCase):
         hs = faiss.cvar.hnsw_stats
         for schedule in self.schedules.values():
             hs.reset()
-            _, _, rec = record_per_query_stats(
+            _, _, rec = record_level_stats(
                 index, xq, k, make_params(32, schedule)
             )
             ndis, nhops = rec["ndis"], rec["nhops"]
             self.assertEqual(ndis.shape, (len(xq), self.max_level + 1))
             self.assertEqual(ndis.sum(), hs.ndis)
-            self.assertEqual(ndis[:, 1:].sum(), hs.ndis_upper)
             self.assertEqual(nhops.sum(), hs.nhops)
             self.assertTrue(np.all(ndis[:, 0] > 0))
             self.assertTrue(np.all(nhops >= 1))
@@ -372,7 +378,7 @@ class TestHNSWPerQueryStats(unittest.TestCase):
         index, xq, k = self.index, self.xq, self.k
         storage = faiss.downcast_index(index.storage)
         for name, schedule in self.schedules.items():
-            _, _, rec = record_per_query_stats(
+            _, _, rec = record_level_stats(
                 index, xq, k, make_params(32, schedule)
             )
             caps = self.caps(schedule)
@@ -416,7 +422,7 @@ class TestHNSWPerQueryStats(unittest.TestCase):
         index, xq, k = self.index, self.xq, self.k
         for name in "greedy", "decay", "beam":
             params = make_params(32, self.schedules[name])
-            _, I, rec = record_per_query_stats(index, xq, k, params)
+            _, I, rec = record_level_stats(index, xq, k, params)
             lo = rec["level_offsets"]
             params0 = make_params(32)
             for qi in range(len(xq)):
@@ -441,19 +447,19 @@ class TestHNSWPerQueryStats(unittest.TestCase):
         nt = faiss.omp_get_max_threads()
         faiss.omp_set_num_threads(1)
         try:
-            _, _, rec1 = record_per_query_stats(index, xq, k, params)
+            _, _, rec1 = record_level_stats(index, xq, k, params)
         finally:
             faiss.omp_set_num_threads(nt)
-        _, _, rec = record_per_query_stats(index, xq, k, params)
+        _, _, rec = record_level_stats(index, xq, k, params)
         for key in rec:
             np.testing.assert_array_equal(rec[key], rec1[key], key)
 
     def test_append_reset_and_layout(self):
         index, xq, k = self.index, self.xq, self.k
         params = make_params(32, self.schedules["decay"])
-        _, _, rec_a = record_per_query_stats(index, xq[:50], k, params)
-        _, _, rec_b = record_per_query_stats(index, xq[50:120], k, params)
-        s = faiss.cvar.hnsw_per_query_stats
+        _, _, rec_a = record_level_stats(index, xq[:50], k, params)
+        _, _, rec_b = record_level_stats(index, xq[50:120], k, params)
+        s = faiss.cvar.hnsw_level_stats
         s.enabled = True
         try:
             s.reset()

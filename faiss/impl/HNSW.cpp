@@ -768,7 +768,6 @@ HNSWStats greedy_update_nearest_impl(
         // update stats
         stats.ndis += ndis;
         stats.nhops += 1;
-        stats.ndis_upper += ndis;
 
         if (nearest == prev_nearest) {
             return stats;
@@ -1238,7 +1237,6 @@ int search_from_candidates_fixVT(
     } else {
         stats.ndis += ndis;
         stats.nhops += nstep;
-        stats.ndis_upper += ndis;
     }
 
     return nres;
@@ -1724,28 +1722,25 @@ int upper_level_ef(const std::vector<int>* efSearch_by_level, int level) {
     return 1;
 }
 
-void record_level(
-        HNSWQueryStats& query_stats,
+void set_level(
+        HNSWLevelStats& level_stats,
+        size_t row,
         int level,
         const std::vector<HNSW::storage_idx_t>& eps,
         const std::vector<float>& ep_dis,
         const HNSWStats& stats_before,
         const HNSWStats& stats_after) {
-    const int* lo = query_stats.level_offsets;
+    const std::vector<int>& lo = level_stats.level_offsets;
     size_t cap = lo[level + 1] - lo[level];
     size_t n = std::min(cap, eps.size());
-    int32_t* out_ids = query_stats.level_eps + lo[level];
-    float* out_dis = query_stats.level_ep_dis + lo[level];
+    size_t slot = row * level_stats.S + lo[level];
     for (size_t j = 0; j < n; j++) {
-        out_ids[j] = eps[j];
-        out_dis[j] = ep_dis[j];
+        level_stats.level_eps[slot + j] = eps[j];
+        level_stats.level_ep_dis[slot + j] = ep_dis[j];
     }
-    for (size_t j = n; j < cap; j++) {
-        out_ids[j] = -1;
-        out_dis[j] = std::numeric_limits<float>::infinity();
-    }
-    query_stats.ndis[level] = stats_after.ndis - stats_before.ndis;
-    query_stats.nhops[level] = stats_after.nhops - stats_before.nhops;
+    size_t cell = row * level_stats.L + level;
+    level_stats.ndis[cell] = stats_after.ndis - stats_before.ndis;
+    level_stats.nhops[cell] = stats_after.nhops - stats_before.nhops;
 }
 
 // just used as a lower bound for the minmaxheap, but it is set for heap search
@@ -1832,7 +1827,8 @@ HNSWStats search_impl(
         ResultHandler& res,
         VisitedTable& vt,
         const SearchParameters* params,
-        HNSWQueryStats* query_stats) {
+        HNSWLevelStats* level_stats,
+        size_t row) {
     HNSWStats stats;
     if (hnsw.entry_point == -1) {
         return stats;
@@ -1879,8 +1875,9 @@ HNSWStats search_impl(
                     vt,
                     stats);
         }
-        if (query_stats) {
-            record_level(*query_stats, level, eps, ep_dis, stats_before, stats);
+        if (level_stats) {
+            set_level(
+                    *level_stats, row, level, eps, ep_dis, stats_before, stats);
         }
     }
 
@@ -1969,9 +1966,10 @@ HNSWStats search_impl(
 
     vt.advance();
 
-    if (query_stats) {
-        query_stats->ndis[0] = stats.ndis - stats_before_level_0.ndis;
-        query_stats->nhops[0] = stats.nhops - stats_before_level_0.nhops;
+    if (level_stats) {
+        size_t cell = row * level_stats->L;
+        level_stats->ndis[cell] = stats.ndis - stats_before_level_0.ndis;
+        level_stats->nhops[cell] = stats.nhops - stats_before_level_0.nhops;
     }
 
     return stats;
@@ -2091,22 +2089,23 @@ HNSWStats HNSW::search(
         ResultHandler& res,
         VisitedTable& vt,
         const SearchParameters* params,
-        HNSWQueryStats* query_stats) const {
+        HNSWLevelStats* level_stats,
+        size_t row) const {
     if (is_similarity) {
         return search_impl<C_similarity>(
-                *this, qdis, index, res, vt, params, query_stats);
+                *this, qdis, index, res, vt, params, level_stats, row);
     }
     return search_impl<C_distance>(
-            *this, qdis, index, res, vt, params, query_stats);
+            *this, qdis, index, res, vt, params, level_stats, row);
 }
 
 /**************************************************************
  * Per-query, per-level stats
  **************************************************************/
 
-HNSWPerQueryStats hnsw_per_query_stats;
+HNSWLevelStats hnsw_level_stats;
 
-void HNSWPerQueryStats::reset() {
+void HNSWLevelStats::reset() {
     nq = 0;
     L = 0;
     S = 0;
@@ -2117,13 +2116,9 @@ void HNSWPerQueryStats::reset() {
     nhops.clear();
 }
 
-void HNSWPerQueryStats::add(
+size_t HNSWLevelStats::add_rows(
         size_t n,
-        const std::vector<int>& new_level_offsets,
-        const int32_t* new_level_eps,
-        const float* new_level_ep_dis,
-        const int64_t* new_ndis,
-        const int64_t* new_nhops) {
+        const std::vector<int>& new_level_offsets) {
     FAISS_THROW_IF_NOT(!new_level_offsets.empty());
     if (level_offsets.empty()) {
         level_offsets = new_level_offsets;
@@ -2132,16 +2127,17 @@ void HNSWPerQueryStats::add(
     } else {
         FAISS_THROW_IF_NOT_MSG(
                 level_offsets == new_level_offsets,
-                "hnsw_per_query_stats: level layout (max_level or "
+                "hnsw_level_stats: level layout (max_level or "
                 "efSearch_by_level) differs from the stored rows, "
                 "call reset() first");
     }
-    level_eps.insert(level_eps.end(), new_level_eps, new_level_eps + n * S);
-    level_ep_dis.insert(
-            level_ep_dis.end(), new_level_ep_dis, new_level_ep_dis + n * S);
-    ndis.insert(ndis.end(), new_ndis, new_ndis + n * L);
-    nhops.insert(nhops.end(), new_nhops, new_nhops + n * L);
+    size_t row0 = nq;
     nq += n;
+    level_eps.resize(nq * S, -1);
+    level_ep_dis.resize(nq * S, std::numeric_limits<float>::infinity());
+    ndis.resize(nq * L, 0);
+    nhops.resize(nq * L, 0);
+    return row0;
 }
 
 std::vector<int> hnsw_level_offsets(

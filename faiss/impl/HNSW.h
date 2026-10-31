@@ -51,7 +51,7 @@ class LockVector;
 struct VisitedTable;
 struct DistanceComputer; // from AuxIndexStructures
 struct HNSWStats;
-struct HNSWQueryStats;
+struct HNSWLevelStats;
 
 struct SearchParametersHNSW : SearchParameters {
     int efSearch = 16;
@@ -251,7 +251,8 @@ struct HNSW {
             ResultHandler& res,
             VisitedTable& vt,
             const SearchParameters* params = nullptr,
-            HNSWQueryStats* query_stats = nullptr) const;
+            HNSWLevelStats* level_stats = nullptr,
+            size_t row = 0) const;
 
     /// search only in level 0 from a given vertex
     void search_level_0(
@@ -307,14 +308,11 @@ struct HNSWStats {
             0; /// number of queries for which the candidate list is exhausted
     size_t ndis = 0;  /// number of distances computed
     size_t nhops = 0; /// number of hops aka number of edges traversed
-    /// distances computed on levels >= 1 (included in ndis)
-    size_t ndis_upper = 0;
 
     void reset() {
         n1 = n2 = 0;
         ndis = 0;
         nhops = 0;
-        ndis_upper = 0;
     }
 
     void combine(const HNSWStats& other) {
@@ -322,50 +320,36 @@ struct HNSWStats {
         n2 += other.n2;
         ndis += other.ndis;
         nhops += other.nhops;
-        ndis_upper += other.ndis_upper;
     }
 };
 
 // global var that collects them all
 FAISS_API extern HNSWStats hnsw_stats;
 
-/// one query's row; level l owns slots [level_offsets[l], level_offsets[l+1])
-struct HNSWQueryStats {
-    const int* level_offsets = nullptr; ///< L + 1 entries
-    /// S slots: set handed down from each level, nearest first, -1 padded
-    int32_t* level_eps = nullptr;
-    /// S slots: distances of that set (as computed by qdis), inf padded
-    float* level_ep_dis = nullptr;
-    int64_t* ndis = nullptr;  ///< L: distances computed per level
-    int64_t* nhops = nullptr; ///< L: expansions per level
-};
-
-/// per-query, per-level stats, appended per search call while enabled
-struct HNSWPerQueryStats {
+/// per-query, per-level stats, one row per query, appended while enabled.
+/// In a row, level l owns slots [level_offsets[l], level_offsets[l+1]).
+struct HNSWLevelStats {
     bool enabled = false;
     size_t nq = 0; ///< rows stored
     int L = 0;     ///< levels per row (max_level + 1)
     int S = 0;     ///< hand-down slots per row, level_offsets[L]
-    std::vector<int> level_offsets;  ///< L + 1
-    std::vector<int32_t> level_eps;  ///< nq * S, row-major
-    std::vector<float> level_ep_dis; ///< nq * S
-    std::vector<int64_t> ndis;       ///< nq * L
-    std::vector<int64_t> nhops;      ///< nq * L
+    std::vector<int> level_offsets; ///< L + 1
+    /// nq * S: set handed down from each level, nearest first, -1 padded
+    std::vector<int32_t> level_eps;
+    /// nq * S: distances of that set (as computed by qdis), inf padded
+    std::vector<float> level_ep_dis;
+    std::vector<int64_t> ndis;  ///< nq * L: distances computed per level
+    std::vector<int64_t> nhops; ///< nq * L: expansions per level
 
     /// keeps enabled
     void reset();
 
-    /// throws if level_offsets differ from the stored rows'
-    void add(
-            size_t n,
-            const std::vector<int>& level_offsets,
-            const int32_t* level_eps,
-            const float* level_ep_dis,
-            const int64_t* ndis,
-            const int64_t* nhops);
+    /// appends n padded rows and returns the first one's index; throws if
+    /// level_offsets differ from the stored rows'
+    size_t add_rows(size_t n, const std::vector<int>& level_offsets);
 };
 
-FAISS_API extern HNSWPerQueryStats hnsw_per_query_stats;
+FAISS_API extern HNSWLevelStats hnsw_level_stats;
 
 /// cap_0 = 0, cap_l = max(1, ef_l)
 std::vector<int> hnsw_level_offsets(
