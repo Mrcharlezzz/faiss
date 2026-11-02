@@ -1,0 +1,16 @@
+defaults:
+  - config
+  - override /dataset: synthetic
+  - override /strategy: multilayer
+  - _self_
+
+experiment_name: synthetic_multilayer
+dataset:
+  database_size: 50000
+  query_size: 1000
+  seed: ${experiment_seed}
+hydra:
+  sweeper:
+    params:
+      dataset.dimension: 2,8,16,32
+      strategy.width: 2,4,8,16

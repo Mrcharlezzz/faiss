@@ -1,0 +1,11 @@
+_target_: bench.datasets.SyntheticDataset
+database_size: 5000
+query_size: 200
+dimension: 16
+seed: 123
+distribution: gaussian
+clusters: 50
+cluster_scale: 4.0
+noise: 1.0
+metric: l2
+normalize: false

@@ -1,0 +1,6 @@
+/outputs/
+/cache/
+__pycache__/
+/data/*
+!/data/download.sh
+/.env

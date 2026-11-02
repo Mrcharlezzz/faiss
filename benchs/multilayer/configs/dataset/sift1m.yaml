@@ -1,0 +1,6 @@
+defaults:
+  - sift
+  - _self_
+
+database_size: 1000000
+query_size: null

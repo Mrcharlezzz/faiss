@@ -1,0 +1,11 @@
+defaults:
+  - config
+  - override /dataset: deep1m
+  - override /strategy: exponential
+  - _self_
+
+experiment_name: deep1m_exponential
+hydra:
+  sweeper:
+    params:
+      strategy.decay: 0.25,0.5,0.75

@@ -1,0 +1,6 @@
+_target_: bench.index_factories.HNSWIndexFactory
+M: 16
+ef_construction: 100
+seed: 123
+build_threads: 1
+cache_policy: reuse

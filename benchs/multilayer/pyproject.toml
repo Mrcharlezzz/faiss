@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "faiss-multilayer-bench"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "hydra-core>=1.3,<1.4",
+    "pyarrow>=14",
+    "threadpoolctl>=3.2",
+    "python-dotenv>=1,<2",
+]
+
+[project.optional-dependencies]
+tracking = ["wandb>=0.19,<1"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

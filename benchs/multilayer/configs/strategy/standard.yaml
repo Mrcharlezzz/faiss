@@ -1,0 +1,9 @@
+_target_: bench.adapters.HNSWAdapter
+name: standard
+ef_search: 32
+schedule: standard
+width: 8
+decay: 0.5
+widths: null
+bounded_queue: true
+check_relative_distance: true

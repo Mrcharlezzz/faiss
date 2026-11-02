@@ -1,0 +1,11 @@
+defaults:
+  - config
+  - override /dataset: sift1m
+  - override /strategy: multilayer
+  - _self_
+
+experiment_name: sift1m_multilayer
+hydra:
+  sweeper:
+    params:
+      strategy.width: 2,4,8,16
