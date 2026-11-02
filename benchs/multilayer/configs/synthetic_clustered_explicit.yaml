@@ -1,0 +1,17 @@
+defaults:
+  - config
+  - override /dataset: synthetic_clustered
+  - override /strategy: explicit
+  - _self_
+
+experiment_name: synthetic_clustered_explicit
+dataset:
+  database_size: 50000
+  query_size: 1000
+  seed: ${experiment_seed}
+strategy:
+  widths: [0, 8, 4, 1]
+hydra:
+  sweeper:
+    params:
+      dataset.dimension: 2,8,16,32

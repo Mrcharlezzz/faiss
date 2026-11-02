@@ -1,0 +1,55 @@
+defaults: # compose the default config groups
+- dataset: synthetic # select the synthetic dataset unless an experiment overrides it
+- index: hnsw_flat # select the hnsw flat index factory
+- strategy: standard # select greedy upper-layer search by default
+- _self_ # apply this file after the selected config groups
+k: 10 # number of neighbors returned per query and computed for ground truth
+ground_truth: # exact nearest-neighbor reference computation, outside timing
+  batch_size: 1000 # number of queries per exact-search call
+execution: # controls for warmups, timing, threading, and query order
+  track: false # enable wandb uploads; --track is a shortcut for execution.track=true
+  search_threads: 1 # faiss openmp threads used for search and exact ground truth
+  blas_threads: 1 # blas threads, controlled separately from faiss openmp threads
+  warmups: 2 # untimed passes over the complete query set before measurement
+  repetitions: 5 # timed passes over the complete query set
+  query_batch_size: 200 # number of queries in each timed search call
+  shuffle_queries: false # shuffle once and reuse that query order across all passes
+  seed: ${experiment_seed} # query-shuffle seed; only affects ordering when shuffle_queries is true
+diagnostics: # raw search statistics collected in a separate untimed pass
+  enabled: true # enable diagnostic collection after the timing runs
+  query_limit: null # first n queries in execution order; null collects all queries
+  batch_size: 200 # number of queries per diagnostic collection and export batch
+  candidates: true # export handed-down candidate ids and distances; false only omits their export
+output: # controls for saving returned neighbors and timing records
+  save_neighbors: true # save returned neighbor ids in numpy result batches
+  save_distances: true # save returned squared l2 distances or inner-product similarities
+  compression: zstd # parquet compression codec; numpy batches use their own compression
+cache_dir: ${hydra:runtime.cwd}/benchs/multilayer/cache # shared storage for cached indexes and exact ground truth
+hydra: # hydra configuration for execution and output directories
+  job: # per-job working directory settings
+    chdir: false # keep relative paths relative to the directory where the command was launched
+  run: # output settings when explicitly running in single-run mode
+    dir: benchs/multilayer/outputs/${now:%Y%m%d-%H%M%S-%f} # output directory for a single run, identified by its timestamp
+  sweep: # output settings for multirun experiments
+    dir: benchs/multilayer/outputs/${experiment_name}/${now:%Y%m%d-%H%M%S-%f} # parent output directory grouped by experiment name and timestamp
+    subdir: ${hydra.job.num} # one subdirectory per sweep job, using its numeric job id
+  mode: MULTIRUN # launch the configured parameter sweep automatically
+  sweeper: # parameter-sweep configuration
+    params: # cartesian product of the parameter values listed below
+      experiment_seed: 1, 2, 3, 4, 5 # run the sweep with each of these experiment seeds
+      strategy.ef_search: 16,32,64,128,256 # layer-0 search widths to evaluate for each seed
+experiment_seed: 123 # fallback seed; the multirun sweep replaces it with each configured seed
+index: # shared graph-construction settings
+  seed: ${experiment_seed} # graph rng seed; multithreaded construction can still vary
+  M: 16 # graph connectivity parameter; layer 0 normally allows up to twice this value
+  ef_construction: 100 # candidate-search width used while constructing the graph
+  build_threads: 1 # faiss openmp threads used for index construction
+  cache_policy: reuse # reuse a matching cached index; alternatives are rebuild and require-existing
+experiment_name: default # fallback experiment label used to organize sweep outputs
+tracking:
+  project: ${oc.env:WANDB_PROJECT,faiss-hnsw} # wandb project receiving experiment runs
+  entity: ${oc.env:WANDB_ENTITY,null} # wandb user or team; empty uses the authenticated default
+  mode: ${oc.env:WANDB_MODE,online} # online uploads immediately; offline records for later sync
+  tags: ${oc.env:WANDB_TAGS,""} # optional comma-separated labels attached to each run
+  upload_ground_truth: ${oc.decode:${oc.env:WANDB_UPLOAD_GROUND_TRUTH,true}} # upload exact neighbors
+  upload_index: ${oc.decode:${oc.env:WANDB_UPLOAD_INDEX,false}} # optionally upload the cached graph

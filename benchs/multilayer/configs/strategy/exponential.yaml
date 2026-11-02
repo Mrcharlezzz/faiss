@@ -1,0 +1,4 @@
+defaults:
+  - standard
+name: exponential
+schedule: exponential

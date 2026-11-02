@@ -1,0 +1,11 @@
+defaults:
+  - config
+  - override /dataset: gist1m
+  - override /strategy: layer1
+  - _self_
+
+experiment_name: gist1m_layer1
+hydra:
+  sweeper:
+    params:
+      strategy.width: 2,4,8,16

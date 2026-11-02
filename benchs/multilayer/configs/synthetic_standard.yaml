@@ -1,0 +1,15 @@
+defaults:
+  - config
+  - override /dataset: synthetic
+  - override /strategy: standard
+  - _self_
+
+experiment_name: synthetic_standard
+dataset:
+  database_size: 50000
+  query_size: 1000
+  seed: ${experiment_seed}
+hydra:
+  sweeper:
+    params:
+      dataset.dimension: 2,8,16,32
