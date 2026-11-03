@@ -15,7 +15,7 @@ class HNSWAdapter:
         ef_search: int, 
         schedule: str, 
         width: int,
-        decay: float, 
+        r_mult: float, 
         widths: Sequence[int] | None,
         bounded_queue: bool, 
         check_relative_distance: bool
@@ -24,7 +24,7 @@ class HNSWAdapter:
         self.ef_search = ef_search
         self.schedule = schedule
         self.width = width
-        self.decay = decay
+        self.r_mult = r_mult
         self.widths = widths
         self.bounded_queue = bounded_queue
         self.check_relative_distance = check_relative_distance
@@ -32,17 +32,18 @@ class HNSWAdapter:
     def prepare(self, index: faiss.IndexHNSW) -> None:
         faiss.cvar.hnsw_level_stats.enabled = False
         faiss.cvar.hnsw_level_stats.reset()
-        if self.ef_search < 1 or self.width < 1 or not 0 <= self.decay <= 1:
-            raise ValueError("invalid search width or decay")
+        self.r = self.r_mult / index.hnsw.nb_neighbors(1)
+        if self.ef_search < 1 or self.width < 1 or not 0 <= self.r <= 1:
+            raise ValueError("invalid search width or r_mult")
         L = index.hnsw.max_level + 1
         widths = [1] * L
         if self.schedule == "layer1":
             if L > 1:
-                widths[1] = max(1, math.floor(self.ef_search * self.decay))
+                widths[1] = max(1, math.floor(self.ef_search * self.r))
         elif self.schedule == "constant":
             widths = [1] + [self.width] * (L - 1)
         elif self.schedule == "exponential":
-            widths = [1] + [max(1, math.floor(self.ef_search * self.decay**l)) for l in range(1, L)]
+            widths = [1] + [max(1, math.floor(self.ef_search * self.r**l)) for l in range(1, L)]
         elif self.schedule == "explicit":
             if self.widths is None:
                 raise ValueError("explicit schedule requires widths")

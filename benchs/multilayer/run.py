@@ -205,6 +205,7 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
         "distance_semantics": "squared_l2" if dataset.metric == "l2" else "inner_product",
         "strategy": strategy.name,
         "effective_widths": getattr(strategy, "effective_widths", None),
+        "r": getattr(strategy, "r", None),
         "timing": "per-batch search call, includes Python binding overhead; excludes export",
     }
     json_file(output / "metadata.json", metadata)

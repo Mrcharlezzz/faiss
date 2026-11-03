@@ -13,4 +13,4 @@ hydra:
   sweeper:
     params:
       dataset.dimension: 2,8,16,32
-      strategy.decay: 0.25,0.5,0.75
+      strategy.r_mult: 0.5,1,2,4,8

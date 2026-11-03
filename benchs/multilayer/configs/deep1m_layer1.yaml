@@ -8,4 +8,4 @@ experiment_name: deep1m_layer1
 hydra:
   sweeper:
     params:
-      strategy.width: 2,4,8,16
+      strategy.r_mult: 0.5,1,2,4,8

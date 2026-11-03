@@ -8,4 +8,4 @@ experiment_name: deep1m_exponential
 hydra:
   sweeper:
     params:
-      strategy.decay: 0.25,0.5,0.75
+      strategy.r_mult: 0.5,1,2,4,8
