@@ -51,11 +51,10 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
     query_id = vector_digest(dataset.queries)
     source = hashlib.sha256() # NOTE: source fingerprint invalidates caches after local C++ changes as well
     root = Path(__file__).resolve().parents[2]
-    for directory in (root / "faiss", Path(__file__).parent):
-        for path in sorted(directory.rglob("*")):
-            if path.suffix in {".cpp", ".h", ".swig", ".py"}:
-                source.update(str(path.relative_to(root)).encode())
-                source.update(path.read_bytes())
+    for path in sorted((root / "faiss").rglob("*")):
+        if path.suffix in {".cpp", ".h", ".swig", ".py"}:
+            source.update(str(path.relative_to(root)).encode())
+            source.update(path.read_bytes())
     source_id = source.hexdigest()
     identity = {
         "database": database_id, 
@@ -105,6 +104,19 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
 
     strategy = hydra.utils.instantiate(cfg.strategy)
     strategy.prepare(index)
+    run_id = digest(
+        {
+            "index": index_id,
+            "ground_truth": gt_id,
+            "ef_search": strategy.ef_search,
+            "effective_widths": strategy.effective_widths,
+            "k": cfg.k
+        }
+    )
+    marker = cache / f"run-{run_id}.txt"
+    if marker.exists():
+        json_file(output / "complete.json", {"schema_version": 1, "status": "duplicate", "of": marker.read_text()})
+        return {}
     order = np.arange(len(dataset.queries), dtype=np.int64) # NOTE: timing and saved results use a fixed query order, recorded explicitly
     if cfg.execution.shuffle_queries:
         np.random.default_rng(cfg.execution.seed).shuffle(order)
@@ -136,11 +148,12 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
         result_dir.mkdir()
     with np.load(gt_path) as truth:
         exact_ids = truth["ids"]
-    correct = 0
+    correct = correct_at_1 = 0
     for number, (start, batch) in enumerate(batches):
         distances, ids = strategy.search(index, batch, cfg.k)
         for query_index, neighbors in zip(order[start:start + len(batch)], ids):
             correct += np.intersect1d(neighbors[neighbors >= 0], exact_ids[query_index]).size
+            correct_at_1 += int(neighbors[0] == exact_ids[query_index][0])
         if cfg.output.save_neighbors or cfg.output.save_distances:
             values = {"query_ids": order[start:start + len(batch)]}
             if cfg.output.save_neighbors:
@@ -153,6 +166,7 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
     query_count = sum(row["query_count"] for row in timings)
     metrics = {
         "recall_at_k": float(correct / (len(queries) * cfg.k)),
+        "recall_at_1": float(correct_at_1 / len(queries)),
         "mean_query_ms": elapsed_ns / query_count / 1e6,
         "queries_per_second": query_count * 1e9 / elapsed_ns,
     }
@@ -164,6 +178,7 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
         for number, start in enumerate(range(0, limit, cfg.diagnostics.batch_size)):
             end = min(start + cfg.diagnostics.batch_size, limit)
             values, aggregate = strategy.collect_diagnostics(index, queries[start:end], cfg.k, cfg.diagnostics.candidates)
+            assert int(values["ndis"].sum()) == aggregate["ndis"], "per-level ndis does not match hnsw_stats.ndis"
             for name in ("ndis", "nhops"):
                 if name in values:
                     totals[name] = totals.get(name, 0) + values[name].sum(axis=0)
@@ -195,6 +210,7 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
     json_file(output / "metadata.json", metadata)
     json_file(output / "metrics.json", metrics)
     json_file(output / "complete.json", {"schema_version": 1, "status": "complete"})
+    marker.write_text(str(output))
     return metrics
 
 
@@ -247,7 +263,7 @@ def main(cfg: DictConfig) -> None:
     OmegaConf.save(OmegaConf.create(OmegaConf.to_container(cfg, resolve=True)), output / "config.yaml")
     with threadpool_limits(limits=cfg.execution.blas_threads, user_api="blas"):
         metrics = run(cfg, output)
-    if cfg.execution.track:
+    if cfg.execution.track and metrics:
         publish(cfg, output, metrics)
     print(f"Artifacts: {output}")
 

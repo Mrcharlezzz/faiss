@@ -6,11 +6,11 @@ defaults:
 
 experiment_name: synthetic_exponential
 dataset:
-  database_size: 50000
-  query_size: 1000
-  seed: ${experiment_seed}
+  database_size: 1000000
+  query_size: 10000
+  dimension: 32
+  seed: 123
 hydra:
   sweeper:
     params:
-      dataset.dimension: 2,8,16,32
-      strategy.decay: 0.25,0.5,0.75
+      strategy.decay: 0.03125,0.0625,0.125,0.25

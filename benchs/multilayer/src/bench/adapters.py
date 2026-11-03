@@ -38,7 +38,7 @@ class HNSWAdapter:
         widths = [1] * L
         if self.schedule == "layer1":
             if L > 1:
-                widths[1] = self.width
+                widths[1] = max(1, math.floor(self.ef_search * self.decay))
         elif self.schedule == "constant":
             widths = [1] + [self.width] * (L - 1)
         elif self.schedule == "exponential":

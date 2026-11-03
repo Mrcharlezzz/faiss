@@ -36,14 +36,14 @@ hydra: # hydra configuration for execution and output directories
   mode: MULTIRUN # launch the configured parameter sweep automatically
   sweeper: # parameter-sweep configuration
     params: # cartesian product of the parameter values listed below
-      experiment_seed: 1, 2, 3, 4, 5 # run the sweep with each of these experiment seeds
-      strategy.ef_search: 16,32,64,128,256 # layer-0 search widths to evaluate for each seed
+      experiment_seed: 1 # experiment seed for this sweep; add values to repeat on more graphs
+      strategy.ef_search: 10,12,15,19,23,28,35,43,52,65,79,98,120,148,182,224,275,338,416,512 # layer-0 search widths to evaluate for each seed
 experiment_seed: 123 # fallback seed; the multirun sweep replaces it with each configured seed
 index: # shared graph-construction settings
   seed: ${experiment_seed} # graph rng seed; multithreaded construction can still vary
-  M: 16 # graph connectivity parameter; layer 0 normally allows up to twice this value
+  M: 32 # graph connectivity parameter; layer 0 normally allows up to twice this value
   ef_construction: 100 # candidate-search width used while constructing the graph
-  build_threads: 1 # faiss openmp threads used for index construction
+  build_threads: 4 # faiss openmp threads used for index construction
   cache_policy: reuse # reuse a matching cached index; alternatives are rebuild and require-existing
 experiment_name: default # fallback experiment label used to organize sweep outputs
 tracking:

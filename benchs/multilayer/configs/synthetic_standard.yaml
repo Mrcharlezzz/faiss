@@ -6,10 +6,7 @@ defaults:
 
 experiment_name: synthetic_standard
 dataset:
-  database_size: 50000
-  query_size: 1000
-  seed: ${experiment_seed}
-hydra:
-  sweeper:
-    params:
-      dataset.dimension: 2,8,16,32
+  database_size: 1000000
+  query_size: 10000
+  dimension: 32
+  seed: 123
