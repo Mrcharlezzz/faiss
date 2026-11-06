@@ -47,6 +47,9 @@ class SyntheticDataset(Dataset):
     clusters: int
     cluster_scale: float
     noise: float
+    centres: NDArray[np.float32] | None = field(init=False, repr=False, default=None)
+    database_clusters: NDArray[np.int32] | None = field(init=False, repr=False, default=None)
+    query_clusters: NDArray[np.int32] | None = field(init=False, repr=False, default=None)
 
     def load(self) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
         if self.database_size < 1 or self.query_size < 1:
@@ -57,8 +60,12 @@ class SyntheticDataset(Dataset):
             x = rng.normal(size=shape)
         elif self.distribution == "clustered":
             centers = rng.normal(size=(self.clusters, self.dimension)) * self.cluster_scale
-            x = centers[rng.integers(self.clusters, size=shape[0])]
+            assignment = rng.integers(self.clusters, size=shape[0])
+            x = centers[assignment]
             x += rng.normal(scale=self.noise, size=shape)
+            self.centres = centers.astype(np.float32)
+            self.database_clusters = assignment[:self.database_size].astype(np.int32)
+            self.query_clusters = assignment[self.database_size:].astype(np.int32)
         else:
             raise ValueError("distribution not supported")
         x = x.astype(np.float32)

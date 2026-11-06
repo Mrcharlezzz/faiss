@@ -1,0 +1,11 @@
+defaults:
+  - synthetic_clustered
+  - _self_
+
+database_size: 200000
+query_size: 10000
+clusters: 200
+cluster_scale: 4.0
+noise: 1.0
+# the point cloud must not vary with the graph seed
+seed: 20261106
