@@ -8,7 +8,7 @@ from pathlib import Path
 import hydra
 import numpy as np
 from bench.export import arrays, json_file, table
-from bench.fingerprints import digest, file_digest, vector_digest
+from bench.fingerprints import digest, recorded_file_digest, vector_digest
 from bench.measure import score, timed_passes
 from bench.identity import index_identity, index_paths, source_fingerprint
 from dotenv import load_dotenv
@@ -165,7 +165,7 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
         "native_libraries": threadpool_info(),
         "effective_search_threads": faiss.omp_get_max_threads(),
         "index_id": index_id, "index_path": str(index_path),
-        "index_sha256": file_digest(index_path),
+        "index_sha256": recorded_file_digest(index_path, sidecar_path),
         "index_reused": reused, "ground_truth_path": str(gt_path),
         "database_id": database_id, "query_id": query_id,
         "database_shape": list(dataset.database.shape),
