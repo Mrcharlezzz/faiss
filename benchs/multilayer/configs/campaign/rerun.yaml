@@ -1,0 +1,35 @@
+name: rerun
+order_seed: 20261106
+blocks:
+  - block: deep1m
+    config_name: rerun
+    dataset: deep1m
+    dimension: null
+    seeds: [1, 2, 3, 4, 5]
+    widths: [null, 2, 4, 8]
+    ef_search: [10, 23, 52, 79, 120, 182, 275, 512]
+    requires: [data/deep/base.10M.fbin, data/deep/query.public.10K.fbin]
+  - block: gist1m
+    config_name: rerun
+    dataset: gist1m
+    dimension: null
+    seeds: [1, 2, 3, 4, 5]
+    widths: [null, 2, 4, 8]
+    ef_search: [10, 23, 52, 79, 120, 182, 275, 512]
+    requires: [data/gist/gist_base.fvecs, data/gist/gist_query.fvecs]
+  - block: clustered200k_d16
+    config_name: rerun
+    dataset: synthetic_clustered_200k
+    dimension: 16
+    seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    widths: [null, 2, 4, 8]
+    ef_search: [10, 23, 52, 79, 120]
+    requires: []
+  - block: clustered200k_d32
+    config_name: rerun
+    dataset: synthetic_clustered_200k
+    dimension: 32
+    seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    widths: [null, 2, 4, 8]
+    ef_search: [10, 23, 52, 79, 120]
+    requires: []
