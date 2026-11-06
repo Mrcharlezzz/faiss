@@ -56,3 +56,10 @@ def test_runner_pins_the_core_and_passes_the_overrides():
     run_cell(_CELL, core=3, runner=lambda argv: (seen.append(argv), SimpleNamespace(returncode=1, stdout=""))[1])
     assert seen[0][:3] == ["taskset", "-c", "3"]
     assert "strategy.ef_search=10" in seen[0]
+
+
+def test_main_loop_guards_the_fingerprint_before_every_cell():
+    import inspect
+    import campaign
+    source = inspect.getsource(campaign.main)
+    assert source.index("for number, cell in enumerate(pending") < source.index("guard_fingerprint(ledger_dir, source_fingerprint(REPO))", source.index("for number, cell in enumerate(pending"))

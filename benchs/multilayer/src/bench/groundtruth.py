@@ -63,14 +63,16 @@ def write_artifact(path: Path, **values: NDArray) -> None:
 def write_s1(cache: Path, index_sha: str, k: int, expected_sha: str, **values: NDArray) -> Path:
     _check_sha(index_sha, expected_sha)
     path = s1_path(cache, index_sha, k)
-    write_artifact(path, **values)
+    write_artifact(path, index_sha=np.array(index_sha), **values)
     return path
 
 
 def load_s1(cache: Path, index_sha: str, k: int, expected_sha: str) -> dict[str, NDArray]:
     _check_sha(index_sha, expected_sha)
     with np.load(s1_path(cache, index_sha, k)) as stored:
-        return {name: stored[name] for name in stored.files}
+        values = {name: stored[name] for name in stored.files}
+    _check_sha(str(values.get("index_sha")), expected_sha)
+    return values
 
 
 def _check_sha(index_sha: str, expected_sha: str) -> None:

@@ -39,3 +39,12 @@ def test_exact_neighbors_on_a_subset_returns_original_ids():
 def test_s1_refuses_an_index_whose_sha_does_not_match(tmp_path):
     with pytest.raises(ValueError, match="index sha"):
         load_s1(tmp_path, index_sha="a" * 64, k=100, expected_sha="b" * 64)
+
+
+def test_s1_stores_and_checks_the_sha_it_was_computed_from(tmp_path):
+    from bench.groundtruth import s1_path, write_s1
+    sha = "a" * 64
+    write_s1(tmp_path, sha, 5, sha, ids=np.zeros((1, 5), dtype="int64"))
+    s1_path(tmp_path, sha, 5).rename(s1_path(tmp_path, "b" * 64, 5))
+    with pytest.raises(ValueError, match="index sha"):
+        load_s1(tmp_path, index_sha="b" * 64, k=5, expected_sha="b" * 64)

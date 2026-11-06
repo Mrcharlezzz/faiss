@@ -7,8 +7,8 @@ from omegaconf import DictConfig, OmegaConf
 import faiss
 from bench.fingerprints import file_digest, vector_digest
 from bench.groundtruth import (
-    clusters_path, exact_neighbors, levels_path, node_levels, s0_path, s1_path, upper_nodes,
-    write_artifact,
+    clusters_path, exact_neighbors, levels_path, load_s1, node_levels, s0_path, s1_path, upper_nodes,
+    write_artifact, write_s1,
 )
 from bench.identity import index_identity, index_paths, source_fingerprint
 
@@ -45,7 +45,7 @@ def main(cfg: DictConfig) -> None:
     path = levels_path(cache, index_sha)
     if not path.exists():
         index = faiss.read_index(str(index_path))
-        write_artifact(path, levels=node_levels(index))
+        write_artifact(path, levels=node_levels(index), index_sha=np.array(index_sha))
         report(path, True)
     else:
         report(path, False)
@@ -57,9 +57,10 @@ def main(cfg: DictConfig) -> None:
         distances, ids = exact_neighbors(
             dataset.database, dataset.queries, cfg.s1_k, dataset.metric, cfg.batch_size, subset=subset
         )
-        write_artifact(path, ids=ids, distances=distances, subset=subset)
+        write_s1(cache, index_sha, cfg.s1_k, index_sha, ids=ids, distances=distances, subset=subset)
         report(path, True)
     else:
+        load_s1(cache, index_sha, cfg.s1_k, index_sha)
         report(path, False)
 
     if dataset.database_clusters is not None:

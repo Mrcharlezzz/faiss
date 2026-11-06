@@ -10,7 +10,7 @@ import numpy as np
 from bench.export import arrays, json_file, table
 from bench.fingerprints import digest, recorded_file_digest, vector_digest
 from bench.measure import score, timed_passes
-from bench.identity import index_identity, index_paths, source_fingerprint
+from bench.identity import index_identity, index_paths, marker_valid, source_fingerprint
 from dotenv import load_dotenv
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
@@ -98,11 +98,12 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
             "ground_truth": gt_id,
             "ef_search": strategy.ef_search,
             "effective_widths": strategy.effective_widths,
-            "k": cfg.k
+            "k": cfg.k,
+            "protocol": [cfg.execution.warmups, cfg.execution.repetitions, cfg.execution.query_batch_size],
         }
     )
     marker = cache / f"run-{run_id}.txt"
-    if marker.exists():
+    if marker_valid(marker):
         json_file(output / "complete.json", {"schema_version": 1, "status": "duplicate", "of": marker.read_text()})
         return {}
     order = np.arange(len(dataset.queries), dtype=np.int64) # NOTE: timing and saved results use a fixed query order, recorded explicitly

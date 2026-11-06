@@ -1,4 +1,5 @@
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -28,3 +29,10 @@ def index_identity(index_cfg: dict[str, Any], database_id: str, metric: str,
 
 def index_paths(cache: Path, index_id: str) -> tuple[Path, Path]:
     return cache / f"index-{index_id}.faiss", cache / f"index-{index_id}.json"
+
+
+def marker_valid(marker: Path) -> bool:
+    if not marker.exists():
+        return False
+    done = Path(marker.read_text().strip()) / "complete.json"
+    return done.exists() and json.loads(done.read_text()).get("status") == "complete"

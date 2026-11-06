@@ -109,6 +109,7 @@ def main() -> int:
     print(f"skipped {len(sequence) - len([c for c in sequence if not ledger.done(c)])} recorded cells")
     durations = []
     for number, cell in enumerate(pending, 1):
+        guard_fingerprint(ledger_dir, source_fingerprint(REPO))
         start = time.perf_counter()
         status = run_cell(cell, args.core)
         durations.append(time.perf_counter() - start)

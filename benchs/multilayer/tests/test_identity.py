@@ -27,3 +27,15 @@ def test_source_fingerprint_follows_file_contents(tmp_path):
     assert source_fingerprint(tmp_path) != before
     (tmp_path / "faiss" / "notes.txt").write_text("ignored")
     assert source_fingerprint(tmp_path) == source_fingerprint(tmp_path)
+
+
+def test_marker_is_valid_only_when_its_run_completed(tmp_path):
+    from bench.identity import marker_valid
+    marker = tmp_path / "run-x.txt"
+    assert not marker_valid(marker)
+    run = tmp_path / "out"
+    marker.write_text(str(run))
+    assert not marker_valid(marker)
+    run.mkdir()
+    (run / "complete.json").write_text('{"status": "complete"}')
+    assert marker_valid(marker)
