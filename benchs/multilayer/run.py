@@ -2,7 +2,6 @@ import argparse
 import json
 import platform
 import sys
-import time
 import uuid
 from pathlib import Path
 
@@ -10,6 +9,7 @@ import hydra
 import numpy as np
 from bench.export import arrays, json_file, table
 from bench.fingerprints import digest, file_digest, vector_digest
+from bench.measure import score, timed_passes
 from bench.identity import index_identity, index_paths, source_fingerprint
 from dotenv import load_dotenv
 from hydra.core.hydra_config import HydraConfig
@@ -111,38 +111,18 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
     queries = np.ascontiguousarray(dataset.queries[order])
     batch_size = cfg.execution.query_batch_size
     batches = [(start, queries[start:start + batch_size]) for start in range(0, len(queries), batch_size)]
-    for _ in range(cfg.execution.warmups):
-        for _, batch in batches:
-            strategy.search(index, batch, cfg.k)
-    timings = []
-    for trial in range(cfg.execution.repetitions):
-        for start, batch in batches:
-            t0 = time.perf_counter_ns()
-            strategy.search(index, batch, cfg.k)
-            elapsed = time.perf_counter_ns() - t0
-            timings.append(
-                {
-                    "trial": trial, 
-                    "query_start": start,
-                    "query_count": len(batch),
-                    "elapsed_ns": elapsed,
-                    "search_threads": faiss.omp_get_max_threads()
-                }
-            )
+    with np.load(gt_path) as truth:
+        exact_ids = truth["ids"]
+    scored = score(strategy, index, batches, cfg.k, order, exact_ids, cfg.execution.warmups)
+    timings = timed_passes(
+        strategy, index, batches, cfg.k, cfg.execution.repetitions, faiss.omp_get_max_threads()
+    )
     table(output / "timings.parquet", timings, cfg.output.compression)
     arrays(output / "query_ids.npz", query_ids=order)
     result_dir = output / "results"
     if cfg.output.save_neighbors or cfg.output.save_distances:
         result_dir.mkdir()
-    with np.load(gt_path) as truth:
-        exact_ids = truth["ids"]
-    correct = correct_at_1 = 0
-    for number, (start, batch) in enumerate(batches):
-        distances, ids = strategy.search(index, batch, cfg.k)
-        for query_index, neighbors in zip(order[start:start + len(batch)], ids):
-            correct += np.intersect1d(neighbors[neighbors >= 0], exact_ids[query_index]).size
-            correct_at_1 += int(neighbors[0] == exact_ids[query_index][0])
-        if cfg.output.save_neighbors or cfg.output.save_distances:
+        for number, ((start, batch), (distances, ids)) in enumerate(zip(batches, scored.results)):
             values = {"query_ids": order[start:start + len(batch)]}
             if cfg.output.save_neighbors:
                 values["ids"] = ids
@@ -153,8 +133,8 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
     elapsed_ns = sum(row["elapsed_ns"] for row in timings)
     query_count = sum(row["query_count"] for row in timings)
     metrics = {
-        "recall_at_k": float(correct / (len(queries) * cfg.k)),
-        "recall_at_1": float(correct_at_1 / len(queries)),
+        "recall_at_k": scored.recall_at_k,
+        "recall_at_1": scored.recall_at_1,
         "mean_query_ms": elapsed_ns / query_count / 1e6,
         "queries_per_second": query_count * 1e9 / elapsed_ns,
     }
