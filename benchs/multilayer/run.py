@@ -1,5 +1,4 @@
 import argparse
-import hashlib
 import json
 import platform
 import sys
@@ -11,6 +10,7 @@ import hydra
 import numpy as np
 from bench.export import arrays, json_file, table
 from bench.fingerprints import digest, file_digest, vector_digest
+from bench.identity import index_identity, index_paths, source_fingerprint
 from dotenv import load_dotenv
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
@@ -49,23 +49,11 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
     cache.mkdir(parents=True, exist_ok=True)
     database_id = vector_digest(dataset.database)
     query_id = vector_digest(dataset.queries)
-    source = hashlib.sha256() # NOTE: source fingerprint invalidates caches after local C++ changes as well
-    root = Path(__file__).resolve().parents[2]
-    for path in sorted((root / "faiss").rglob("*")):
-        if path.suffix in {".cpp", ".h", ".swig", ".py"}:
-            source.update(str(path.relative_to(root)).encode())
-            source.update(path.read_bytes())
-    source_id = source.hexdigest()
-    identity = {
-        "database": database_id, 
-        "metric": dataset.metric,
-        "index": OmegaConf.to_container(cfg.index, resolve=True),
-        "faiss_version": faiss.__version__, 
-        "source": source_id
-    }
-    identity["index"].pop("cache_policy")
-    index_id = digest(identity)
-    index_path = cache / f"index-{index_id}.faiss"
+    source_id = source_fingerprint(Path(__file__).resolve().parents[2])
+    identity, index_id = index_identity(
+        OmegaConf.to_container(cfg.index, resolve=True), database_id, dataset.metric, faiss.__version__, source_id
+    )
+    index_path, sidecar_path = index_paths(cache, index_id)
     reused = index_path.exists() and cfg.index.cache_policy != "rebuild"
     if not reused:
         if cfg.index.cache_policy == "require-existing":
@@ -75,7 +63,7 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
         temp = cache / f".{uuid.uuid4().hex}.faiss"
         faiss.write_index(index, str(temp))
         temp.replace(index_path)
-        json_file(cache / f"index-{index_id}.json", identity)
+        json_file(sidecar_path, identity)
     else:
         index = faiss.read_index(str(index_path))
     faiss.omp_set_num_threads(cfg.execution.search_threads)
