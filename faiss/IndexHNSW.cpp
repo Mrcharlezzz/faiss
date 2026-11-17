@@ -427,6 +427,13 @@ void hnsw_search(
     size_t n1 = 0, n2 = 0, ndis = 0, nhops = 0;
     size_t n_rabitq_1bit = 0, n_rabitq_refine = 0;
 
+    HNSWLevelStats* level_stats =
+            hnsw_level_stats.enabled ? &hnsw_level_stats : nullptr;
+    size_t row0 = level_stats
+            ? level_stats->add_rows(
+                      n, hnsw_level_offsets(hnsw.max_level, params))
+            : 0;
+
     idx_t check_period = InterruptCallback::get_period_hint(
             hnsw.max_level * index->d * efSearch);
 
@@ -466,8 +473,14 @@ void hnsw_search(
                         rq->stats.reset();
                     }
 
-                    HNSWStats stats =
-                            hnsw.search(*dis, index, *res, *vt, params);
+                    HNSWStats stats = hnsw.search(
+                            *dis,
+                            index,
+                            *res,
+                            *vt,
+                            params,
+                            level_stats,
+                            row0 + i);
                     n1 += stats.n1;
                     n2 += stats.n2;
                     ndis += stats.ndis;

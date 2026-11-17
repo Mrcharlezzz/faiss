@@ -51,12 +51,16 @@ class LockVector;
 struct VisitedTable;
 struct DistanceComputer; // from AuxIndexStructures
 struct HNSWStats;
+struct HNSWLevelStats;
 
 struct SearchParametersHNSW : SearchParameters {
     int efSearch = 16;
     bool check_relative_distance = true;
     bool bounded_queue = true;
 
+
+    /// beam width per upper level; missing or <= 1 is greedy, entry 0 ignored
+    std::vector<int> efSearch_by_level;
     ~SearchParametersHNSW() {}
 };
 
@@ -246,7 +250,9 @@ struct HNSW {
             const IndexHNSW* index,
             ResultHandler& res,
             VisitedTable& vt,
-            const SearchParameters* params = nullptr) const;
+            const SearchParameters* params = nullptr,
+            HNSWLevelStats* level_stats = nullptr,
+            size_t row = 0) const;
 
     /// search only in level 0 from a given vertex
     void search_level_0(
@@ -319,6 +325,36 @@ struct HNSWStats {
 
 // global var that collects them all
 FAISS_API extern HNSWStats hnsw_stats;
+
+/// per-query, per-level stats, one row per query, appended while enabled.
+/// In a row, level l owns slots [level_offsets[l], level_offsets[l+1]).
+struct HNSWLevelStats {
+    bool enabled = false;
+    size_t nq = 0; ///< rows stored
+    int L = 0;     ///< levels per row (max_level + 1)
+    int S = 0;     ///< hand-down slots per row, level_offsets[L]
+    std::vector<int> level_offsets; ///< L + 1
+    /// nq * S: set handed down from each level, nearest first, -1 padded
+    std::vector<int32_t> level_eps;
+    /// nq * S: distances of that set (as computed by qdis), inf padded
+    std::vector<float> level_ep_dis;
+    std::vector<int64_t> ndis;  ///< nq * L: distances computed per level
+    std::vector<int64_t> nhops; ///< nq * L: expansions per level
+
+    /// keeps enabled
+    void reset();
+
+    /// appends n padded rows and returns the first one's index; throws if
+    /// level_offsets differ from the stored rows'
+    size_t add_rows(size_t n, const std::vector<int>& level_offsets);
+};
+
+FAISS_API extern HNSWLevelStats hnsw_level_stats;
+
+/// cap_0 = 0, cap_l = max(1, ef_l)
+std::vector<int> hnsw_level_offsets(
+        int max_level,
+        const SearchParameters* params);
 
 /// Internal HNSW algorithm helpers. These are not part of the public API; they
 /// are exposed here only so that unit tests (and a few cross-TU callers such as
