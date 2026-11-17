@@ -1,6 +1,6 @@
 import numpy as np
 
-from bench.datasets import SyntheticDataset
+from bench.datasets import FvecsDataset, SyntheticDataset, write_fvecs
 
 
 def test_clustered_dataset_labels_name_the_nearest_centre():
@@ -20,3 +20,12 @@ def test_gaussian_dataset_has_no_cluster_labels():
                           distribution="gaussian", clusters=5, cluster_scale=4.0,
                           noise=1.0, metric="l2", normalize=False)
     assert (ds.centres, ds.database_clusters, ds.query_clusters) == (None, None, None)
+
+
+def test_file_dataset_has_no_cluster_labels(tmp_path):
+    x = np.random.default_rng(0).normal(size=(20, 4)).astype(np.float32)
+    write_fvecs(tmp_path / "db.fvecs", x)
+    write_fvecs(tmp_path / "q.fvecs", x[:5])
+    ds = FvecsDataset(directory=tmp_path, database_file="db.fvecs", query_file="q.fvecs",
+                      database_size=None, query_size=None, metric="l2", normalize=False)
+    assert ds.database_clusters is None

@@ -1,0 +1,10 @@
+defaults:
+  - config
+  - override /strategy: standard
+  - _self_
+
+experiment_name: glove25
+hydra:
+  run:
+    dir: benchs/multilayer/outputs/glove25/${now:%Y%m%d-%H%M%S-%f}
+  mode: RUN

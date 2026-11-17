@@ -35,3 +35,10 @@ python benchs/multilayer/campaign.py --config benchs/multilayer/configs/campaign
 - Each cell is recorded in `outputs/<name>/campaign.jsonl` as `complete`, `duplicate` (same effective widths as an earlier cell, so no new data) or `failed`. A rerun skips recorded cells and retries failed ones.
 - It refuses to continue if the `faiss/` source fingerprint differs from the one the campaign started with, and exits non-zero if any cell failed.
 - It does not build indexes or ground truth; do that first.
+
+## GloVe-25 campaign
+
+- Data: ann-benchmarks `glove-25-angular.hdf5`, converted to fvecs by `convert_glove.py` (see `data/download.sh`); the first 1,000,000 base rows and all 10,000 queries are used. Conversion needs h5py: `pip install -e benchs/multilayer[data]`.
+- Cosine similarity runs as `metric: ip` with `normalize: true`, so `results/` and `diagnostics/` distances are +cos and larger is nearer, the opposite of the L2 datasets.
+- Widths and ef0 ladder match Deep1M and GIST1M (M = 32, efConstruction = 100); 10 graph seeds give 320 cells.
+- Campaign file: `configs/campaign/glove25.yaml`.

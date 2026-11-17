@@ -7,12 +7,25 @@ import numpy as np
 from numpy.typing import NDArray
 
 
+def write_fvecs(path: Path, x: NDArray[np.float32]) -> None:
+    x = np.ascontiguousarray(x, dtype="<f4")
+    rows = np.empty((len(x), x.shape[1] + 1), dtype="<i4")
+    rows[:, 0] = x.shape[1]
+    rows[:, 1:] = x.view("<i4")
+    temporary = path.with_name(path.name + ".tmp")
+    rows.tofile(temporary)
+    temporary.replace(path)
+
+
 @dataclass(kw_only=True)
 class Dataset(ABC):
     metric: Literal["l2", "ip"]
     normalize: bool
     database: NDArray[np.float32] = field(init=False, repr=False)
     queries: NDArray[np.float32] = field(init=False, repr=False)
+    centres: NDArray[np.float32] | None = field(init=False, repr=False, default=None)
+    database_clusters: NDArray[np.int32] | None = field(init=False, repr=False, default=None)
+    query_clusters: NDArray[np.int32] | None = field(init=False, repr=False, default=None)
 
     def __post_init__(self) -> None:
         if self.metric not in {"l2", "ip"}:
@@ -47,9 +60,6 @@ class SyntheticDataset(Dataset):
     clusters: int
     cluster_scale: float
     noise: float
-    centres: NDArray[np.float32] | None = field(init=False, repr=False, default=None)
-    database_clusters: NDArray[np.int32] | None = field(init=False, repr=False, default=None)
-    query_clusters: NDArray[np.int32] | None = field(init=False, repr=False, default=None)
 
     def load(self) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
         if self.database_size < 1 or self.query_size < 1:

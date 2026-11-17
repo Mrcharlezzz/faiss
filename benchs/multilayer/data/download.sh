@@ -13,3 +13,9 @@ mkdir -p benchs/multilayer/data/deep
 curl --fail --location --retry 3 --continue-at - https://storage.yandexcloud.net/yandex-research/ann-datasets/DEEP/base.10M.fbin --output benchs/multilayer/data/deep/base.10M.fbin
 
 curl --fail --location --retry 3 --continue-at - https://storage.yandexcloud.net/yandex-research/ann-datasets/DEEP/query.public.10K.fbin --output benchs/multilayer/data/deep/query.public.10K.fbin
+
+mkdir -p benchs/multilayer/data/glove
+
+curl --fail --location --retry 3 --continue-at - http://ann-benchmarks.com/glove-25-angular.hdf5 --output benchs/multilayer/data/glove/glove-25-angular.hdf5
+
+python benchs/multilayer/convert_glove.py benchs/multilayer/data/glove/glove-25-angular.hdf5 benchs/multilayer/data/glove
