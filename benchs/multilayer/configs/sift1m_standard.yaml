@@ -1,0 +1,7 @@
+defaults:
+  - config
+  - override /dataset: sift1m
+  - override /strategy: standard
+  - _self_
+
+experiment_name: sift1m_standard

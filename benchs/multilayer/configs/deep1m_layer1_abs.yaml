@@ -1,0 +1,13 @@
+defaults:
+  - config
+  - override /dataset: deep1m
+  - override /strategy: explicit
+  - _self_
+
+experiment_name: deep1m_layer1_abs
+hydra:
+  sweeper:
+    params:
+      experiment_seed: 1,2
+      strategy.widths: "[0,2],[0,4],[0,8],[0,16]" # layers above 1 are padded to greedy
+      strategy.ef_search: 10,15,23,35,52,79,120,182,275,416

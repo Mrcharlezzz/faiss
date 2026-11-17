@@ -1,0 +1,18 @@
+defaults:
+  - config
+  - override /dataset: synthetic
+  - override /strategy: explicit
+  - _self_
+
+experiment_name: synthetic_layer1_abs
+dataset:
+  database_size: 1000000
+  query_size: 10000
+  dimension: 32
+  seed: ${experiment_seed} # resample the points per seed, not just the graph
+hydra:
+  sweeper:
+    params:
+      experiment_seed: 1,2
+      strategy.widths: "[0,2],[0,4],[0,8],[0,16]" # layers above 1 are padded to greedy
+      strategy.ef_search: 10,15,23,35,52,79,120,182,275,416

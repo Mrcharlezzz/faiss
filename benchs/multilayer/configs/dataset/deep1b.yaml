@@ -1,0 +1,6 @@
+defaults:
+  - deep1m
+  - _self_
+
+database_file: base.1B.fbin
+database_size: 1000000000

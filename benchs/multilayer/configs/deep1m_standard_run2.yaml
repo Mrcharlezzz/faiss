@@ -1,0 +1,12 @@
+defaults:
+  - config
+  - override /dataset: deep1m
+  - override /strategy: standard
+  - _self_
+
+experiment_name: deep1m_standard_run2
+hydra:
+  sweeper:
+    params:
+      experiment_seed: 1,2
+      strategy.ef_search: 10,15,23,35,52,79,120,182,275,416

@@ -1,0 +1,11 @@
+defaults:
+  - config
+  - override /dataset: deep1b
+  - override /strategy: multilayer
+  - _self_
+
+experiment_name: deep1b_multilayer
+hydra:
+  sweeper:
+    params:
+      strategy.width: 2,4,8,16

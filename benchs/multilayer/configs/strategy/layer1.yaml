@@ -1,0 +1,4 @@
+defaults:
+  - standard
+name: layer1
+schedule: layer1

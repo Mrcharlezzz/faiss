@@ -1,0 +1,9 @@
+defaults:
+  - config
+  - override /dataset: deep1m
+  - override /strategy: explicit
+  - _self_
+
+experiment_name: deep1m_explicit
+strategy:
+  widths: [0, 8, 4, 1]

@@ -1,0 +1,17 @@
+defaults:
+  - config
+  - override /dataset: synthetic
+  - override /strategy: standard
+  - _self_
+
+experiment_name: synthetic_standard_run2
+dataset:
+  database_size: 1000000
+  query_size: 10000
+  dimension: 32
+  seed: ${experiment_seed} # same point clouds as synthetic_layer1_abs
+hydra:
+  sweeper:
+    params:
+      experiment_seed: 1,2
+      strategy.ef_search: 10,15,23,35,52,79,120,182,275,416
