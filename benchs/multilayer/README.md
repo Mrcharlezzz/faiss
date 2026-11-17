@@ -42,3 +42,7 @@ python benchs/multilayer/campaign.py --config benchs/multilayer/configs/campaign
 - Cosine similarity runs as `metric: ip` with `normalize: true`, so `results/` and `diagnostics/` distances are +cos and larger is nearer, the opposite of the L2 datasets.
 - Widths and ef0 ladder match Deep1M and GIST1M (M = 32, efConstruction = 100); 10 graph seeds give 320 cells.
 - Campaign file: `configs/campaign/glove25.yaml`.
+
+## Analysis
+
+`analysis/` converts the campaign outputs into tables and holds the notebooks behind the results; see `analysis/README.md`.
