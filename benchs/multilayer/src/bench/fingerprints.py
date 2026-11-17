@@ -24,3 +24,18 @@ def file_digest(path: Path) -> str:
         for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def recorded_file_digest(path: Path, sidecar: Path) -> str:
+    recorded = json.loads(sidecar.read_text()) if sidecar.exists() else {}
+    stat = path.stat()
+    if (
+        "index_sha256" in recorded
+        and recorded.get("size") == stat.st_size
+        and recorded.get("mtime_ns") == stat.st_mtime_ns
+    ):
+        return recorded["index_sha256"]
+    sha = file_digest(path)
+    recorded.update(index_sha256=sha, size=stat.st_size, mtime_ns=stat.st_mtime_ns)
+    sidecar.write_text(json.dumps(recorded, indent=2) + "\n")
+    return sha

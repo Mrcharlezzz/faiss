@@ -1,0 +1,11 @@
+defaults:
+  - config
+  - _self_
+
+s0_k: 1000
+s1_k: 100
+batch_size: 1000
+hydra:
+  run:
+    dir: benchs/multilayer/outputs/ground_truth/${now:%Y%m%d-%H%M%S-%f}
+  mode: RUN

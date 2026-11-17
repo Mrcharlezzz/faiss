@@ -1,0 +1,10 @@
+defaults:
+  - config
+  - override /strategy: standard
+  - _self_
+
+experiment_name: rerun
+hydra:
+  run:
+    dir: benchs/multilayer/outputs/rerun/${now:%Y%m%d-%H%M%S-%f}
+  mode: RUN

@@ -1,16 +1,16 @@
 import argparse
-import hashlib
 import json
 import platform
 import sys
-import time
 import uuid
 from pathlib import Path
 
 import hydra
 import numpy as np
 from bench.export import arrays, json_file, table
-from bench.fingerprints import digest, file_digest, vector_digest
+from bench.fingerprints import digest, recorded_file_digest, vector_digest
+from bench.measure import score, timed_passes
+from bench.identity import index_identity, index_paths, marker_valid, source_fingerprint
 from dotenv import load_dotenv
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
@@ -49,23 +49,11 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
     cache.mkdir(parents=True, exist_ok=True)
     database_id = vector_digest(dataset.database)
     query_id = vector_digest(dataset.queries)
-    source = hashlib.sha256() # NOTE: source fingerprint invalidates caches after local C++ changes as well
-    root = Path(__file__).resolve().parents[2]
-    for path in sorted((root / "faiss").rglob("*")):
-        if path.suffix in {".cpp", ".h", ".swig", ".py"}:
-            source.update(str(path.relative_to(root)).encode())
-            source.update(path.read_bytes())
-    source_id = source.hexdigest()
-    identity = {
-        "database": database_id, 
-        "metric": dataset.metric,
-        "index": OmegaConf.to_container(cfg.index, resolve=True),
-        "faiss_version": faiss.__version__, 
-        "source": source_id
-    }
-    identity["index"].pop("cache_policy")
-    index_id = digest(identity)
-    index_path = cache / f"index-{index_id}.faiss"
+    source_id = source_fingerprint(Path(__file__).resolve().parents[2])
+    identity, index_id = index_identity(
+        OmegaConf.to_container(cfg.index, resolve=True), database_id, dataset.metric, faiss.__version__, source_id
+    )
+    index_path, sidecar_path = index_paths(cache, index_id)
     reused = index_path.exists() and cfg.index.cache_policy != "rebuild"
     if not reused:
         if cfg.index.cache_policy == "require-existing":
@@ -75,7 +63,7 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
         temp = cache / f".{uuid.uuid4().hex}.faiss"
         faiss.write_index(index, str(temp))
         temp.replace(index_path)
-        json_file(cache / f"index-{index_id}.json", identity)
+        json_file(sidecar_path, identity)
     else:
         index = faiss.read_index(str(index_path))
     faiss.omp_set_num_threads(cfg.execution.search_threads)
@@ -110,11 +98,12 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
             "ground_truth": gt_id,
             "ef_search": strategy.ef_search,
             "effective_widths": strategy.effective_widths,
-            "k": cfg.k
+            "k": cfg.k,
+            "protocol": [cfg.execution.warmups, cfg.execution.repetitions, cfg.execution.query_batch_size],
         }
     )
     marker = cache / f"run-{run_id}.txt"
-    if marker.exists():
+    if marker_valid(marker):
         json_file(output / "complete.json", {"schema_version": 1, "status": "duplicate", "of": marker.read_text()})
         return {}
     order = np.arange(len(dataset.queries), dtype=np.int64) # NOTE: timing and saved results use a fixed query order, recorded explicitly
@@ -123,38 +112,18 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
     queries = np.ascontiguousarray(dataset.queries[order])
     batch_size = cfg.execution.query_batch_size
     batches = [(start, queries[start:start + batch_size]) for start in range(0, len(queries), batch_size)]
-    for _ in range(cfg.execution.warmups):
-        for _, batch in batches:
-            strategy.search(index, batch, cfg.k)
-    timings = []
-    for trial in range(cfg.execution.repetitions):
-        for start, batch in batches:
-            t0 = time.perf_counter_ns()
-            strategy.search(index, batch, cfg.k)
-            elapsed = time.perf_counter_ns() - t0
-            timings.append(
-                {
-                    "trial": trial, 
-                    "query_start": start,
-                    "query_count": len(batch),
-                    "elapsed_ns": elapsed,
-                    "search_threads": faiss.omp_get_max_threads()
-                }
-            )
+    with np.load(gt_path) as truth:
+        exact_ids = truth["ids"]
+    scored = score(strategy, index, batches, cfg.k, order, exact_ids, cfg.execution.warmups)
+    timings = timed_passes(
+        strategy, index, batches, cfg.k, cfg.execution.repetitions, faiss.omp_get_max_threads()
+    )
     table(output / "timings.parquet", timings, cfg.output.compression)
     arrays(output / "query_ids.npz", query_ids=order)
     result_dir = output / "results"
     if cfg.output.save_neighbors or cfg.output.save_distances:
         result_dir.mkdir()
-    with np.load(gt_path) as truth:
-        exact_ids = truth["ids"]
-    correct = correct_at_1 = 0
-    for number, (start, batch) in enumerate(batches):
-        distances, ids = strategy.search(index, batch, cfg.k)
-        for query_index, neighbors in zip(order[start:start + len(batch)], ids):
-            correct += np.intersect1d(neighbors[neighbors >= 0], exact_ids[query_index]).size
-            correct_at_1 += int(neighbors[0] == exact_ids[query_index][0])
-        if cfg.output.save_neighbors or cfg.output.save_distances:
+        for number, ((start, batch), (distances, ids)) in enumerate(zip(batches, scored.results)):
             values = {"query_ids": order[start:start + len(batch)]}
             if cfg.output.save_neighbors:
                 values["ids"] = ids
@@ -165,8 +134,8 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
     elapsed_ns = sum(row["elapsed_ns"] for row in timings)
     query_count = sum(row["query_count"] for row in timings)
     metrics = {
-        "recall_at_k": float(correct / (len(queries) * cfg.k)),
-        "recall_at_1": float(correct_at_1 / len(queries)),
+        "recall_at_k": scored.recall_at_k,
+        "recall_at_1": scored.recall_at_1,
         "mean_query_ms": elapsed_ns / query_count / 1e6,
         "queries_per_second": query_count * 1e9 / elapsed_ns,
     }
@@ -197,7 +166,7 @@ def run(cfg: DictConfig, output: Path) -> dict[str, float]:
         "native_libraries": threadpool_info(),
         "effective_search_threads": faiss.omp_get_max_threads(),
         "index_id": index_id, "index_path": str(index_path),
-        "index_sha256": file_digest(index_path),
+        "index_sha256": recorded_file_digest(index_path, sidecar_path),
         "index_reused": reused, "ground_truth_path": str(gt_path),
         "database_id": database_id, "query_id": query_id,
         "database_shape": list(dataset.database.shape),

@@ -10,8 +10,8 @@ execution: # controls for warmups, timing, threading, and query order
   track: false # enable wandb uploads; --track is a shortcut for execution.track=true
   search_threads: 1 # faiss openmp threads used for search and exact ground truth
   blas_threads: 1 # blas threads, controlled separately from faiss openmp threads
-  warmups: 2 # untimed passes over the complete query set before measurement
-  repetitions: 5 # timed passes over the complete query set
+  warmups: 1 # untimed passes over the complete query set before measurement
+  repetitions: 3 # timed passes over the complete query set
   query_batch_size: 200 # number of queries in each timed search call
   shuffle_queries: false # shuffle once and reuse that query order across all passes
   seed: ${experiment_seed} # query-shuffle seed; only affects ordering when shuffle_queries is true
