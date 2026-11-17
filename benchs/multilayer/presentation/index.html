@@ -1,0 +1,708 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<meta charset="utf-8">
+<title>Wider Upper-Layer Search</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: fixed 1280x720 stage scaled to the window; each slide is one large visual with a
+   short title strip on top. No section bar; slide counter between the nav buttons. N toggles the speaker notes. */
+:root{
+  /* palette follows the reference deck (cool paper, one accent for the query) */
+  --bg:#DCE3EA; --paper:#EEF2F5; --panel:#F8FAFB; --ink:#17202E; --mute:#5F6B7E; --line:#C9D2DC; --faint:#E1E7ED;
+  --q:#D81E5B;            /* query, and anything the query owns */
+  --hot:#DA8C12;          /* current / active element */
+  --cand:#2F74C0;         /* candidates */
+  --res:#2E9A68;          /* results */
+  --visit:#9AA6B6;        /* visited */
+  --l0:#2F74C0; --l1:#8656C4; --l2:#1795A8; --l3:#9C7B33;   /* layer colours, bottom to top */
+  --font:"Bricolage Grotesque",system-ui,"Segoe UI",Roboto,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0C111C; --paper:#141B29; --panel:#1B2436; --ink:#E6EBF2; --mute:#93A0B4; --line:#34425A; --faint:#212B3E;
+    --q:#FF4F86; --hot:#F2AE3D; --cand:#5C9DE6; --res:#4FC08A; --visit:#5D6A80;
+    --l0:#5C9DE6; --l1:#A884E6; --l2:#3CC2D4; --l3:#C9A75A; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0C111C; --paper:#141B29; --panel:#1B2436; --ink:#E6EBF2; --mute:#93A0B4; --line:#34425A; --faint:#212B3E;
+  --q:#FF4F86; --hot:#F2AE3D; --cand:#5C9DE6; --res:#4FC08A; --visit:#5D6A80;
+  --l0:#5C9DE6; --l1:#A884E6; --l2:#3CC2D4; --l3:#C9A75A; color-scheme:dark;
+}
+html,body{height:100%;margin:0}
+*,*::before,*::after{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--font);overflow:hidden;-webkit-font-smoothing:antialiased}
+#viewport{position:relative;width:100%;height:100%;overflow:hidden}
+#stage{position:absolute;left:50%;top:50%;width:1280px;height:720px;background:var(--paper);transform-origin:center center;overflow:hidden}
+.m{font-family:var(--mono);font-weight:500}
+
+/* slides: title strip top-left, the visual fills the rest (area 1184 x 590 at left 48, top 104) */
+.slide{position:absolute;inset:0;display:none}
+.slide.active{display:block;animation:fadein .35s ease}
+@keyframes fadein{from{opacity:0}to{opacity:1}}
+.slide h2{position:absolute;left:48px;top:34px;margin:0;font-size:38px;font-weight:600;letter-spacing:-.015em;line-height:1.1}
+.viz{position:absolute;left:48px;top:104px;width:1184px;height:590px}
+/* slide 1: headline column left, visual right */
+#s1 .viz{left:430px;top:60px;width:810px;height:620px}
+.points{position:absolute;left:48px;top:150px;width:350px;display:flex;flex-direction:column;gap:34px}
+.points .grp{display:flex;flex-direction:column;gap:12px}
+.points .lbl{font-size:15px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}
+.points p{margin:0;font-size:26px;line-height:1.25;font-weight:500}
+/* slide 2: one caption line under the title, visual below */
+#s2 .viz{top:150px;height:550px}
+.caption{position:absolute;left:48px;top:96px;font-size:24px;color:var(--mute)}
+.caption b{color:var(--ink);font-weight:600}
+.caption span{position:absolute;white-space:nowrap}
+
+/* step reveal: elements with data-s="n" appear at step n */
+[data-s]{transition:opacity .45s ease}
+[data-s]:not(.on){opacity:0;pointer-events:none}
+
+/* shared controls for visualizations */
+.ctl{font:inherit;font-size:17px;padding:6px 14px;border-radius:999px;border:1.5px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+.ctl:hover{border-color:var(--ink)}
+.ctl.primary{}
+.ctl:focus-visible,input[type=range]:focus-visible{outline:3px solid var(--q);outline-offset:2px}
+input[type=range]{accent-color:var(--q)}
+.chip{display:inline-block;font-family:var(--mono);font-size:16px;padding:2px 9px;border-radius:6px;background:var(--panel);border:1.5px solid var(--line);color:var(--ink)}
+
+/* explanation pop-ups: any element (HTML or SVG) with data-explain="…" */
+[data-explain][data-keep]{cursor:help}
+#pop{position:absolute;z-index:30;max-width:320px;padding:12px 14px;border-radius:10px;background:var(--ink);color:var(--paper);
+  font-size:16px;line-height:1.4;box-shadow:0 10px 30px rgba(0,0,0,.25);pointer-events:none;opacity:0;transition:opacity .15s}
+#pop.on{opacity:1}
+
+/* speaker notes (N) */
+#notes{position:fixed;left:0;right:0;bottom:0;max-height:38%;overflow:auto;background:var(--ink);color:var(--paper);
+  font-size:16px;line-height:1.5;padding:14px max(16px,env(safe-area-inset-left,0px)) calc(14px + env(safe-area-inset-bottom,0px));display:none;z-index:40}
+#notes.on{display:block}
+#notes h4{margin:0 0 6px;font-size:13px;letter-spacing:.1em;text-transform:uppercase;opacity:.7}
+#notes ul{margin:0;padding-left:20px}
+.notes-src{display:none}
+
+/* minimal nav: two round buttons, bottom-right, fade unless hovered */
+.nav{position:absolute;right:20px;bottom:16px;display:flex;align-items:center;gap:8px;opacity:.45;transition:opacity .2s;z-index:20}
+#counter{min-width:52px;text-align:center;font-size:15px;color:var(--mute);font-variant-numeric:tabular-nums}
+.nav:hover,.nav:focus-within{opacity:1}
+.nav button{font:inherit;font-size:18px;width:34px;height:34px;border-radius:50%;border:1.5px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+@media (prefers-reduced-motion: reduce){ .slide.active{animation:none} [data-s]{transition:none} }
+
+/* slide 0: title */
+#s0 h1{position:absolute;left:96px;top:210px;margin:0;font-size:76px;font-weight:600;letter-spacing:-.025em;line-height:1.02;max-width:900px}
+#s0 .who{position:absolute;left:96px;top:420px;font-size:24px;color:var(--mute);line-height:1.6}
+#s0 svg{position:absolute;right:-40px;top:70px;opacity:.55}
+/* slides with a caption line (2, 3): visual below it */
+#s3 .viz{top:150px;height:550px}
+.tag{position:absolute;right:48px;top:44px;font-family:var(--mono);font-size:14px;color:var(--mute);border:1.5px dashed var(--line);border-radius:6px;padding:2px 8px}
+/* slide 4: one sentence */
+.big{position:absolute;left:96px;right:96px;top:200px;font-size:44px;line-height:1.3;font-weight:500;letter-spacing:-.01em}
+.big b{font-weight:600;color:var(--l1)}
+.kicker{position:absolute;left:96px;top:140px;font-size:15px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}
+/* shared blocks for the static slides */
+.lbl{font-size:15px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}
+.card{position:absolute;background:var(--panel);border:1.5px solid var(--line);border-radius:14px;padding:24px 28px}
+.card h3{margin:0 0 6px;font-size:18px;font-weight:500;color:var(--mute)}
+.card .claim{font-size:30px;font-weight:600;line-height:1.2;margin:10px 0 0}
+.card .ins{font-size:20px;line-height:1.35;color:var(--mute);margin:18px 0 0}
+.card .ins b{color:var(--ink);font-weight:600}
+.gap{position:absolute;left:48px;right:48px;bottom:36px;padding:20px 28px;border-radius:14px;border:2px solid var(--q);background:color-mix(in srgb,var(--q) 8%,var(--panel));font-size:26px;font-weight:500}
+.gap .lbl{color:var(--q);margin-right:14px}
+.line{font-size:26px;line-height:1.3;font-weight:500}
+.sub{font-size:20px;color:var(--mute);line-height:1.4}
+.src{position:absolute;left:48px;bottom:22px;font-size:14px;color:var(--mute)}
+/* flow boxes (prediction, controls) */
+.flow{position:absolute;left:48px;right:48px;display:flex;align-items:stretch;gap:0}
+.flow .box{flex:1;background:var(--panel);border:1.5px solid var(--line);border-radius:14px;padding:20px 20px;font-size:23px;font-weight:500;line-height:1.25;display:flex;flex-direction:column;justify-content:center;gap:8px}
+.flow .box small{font-size:16px;font-weight:400;color:var(--mute)}
+.flow .arr{width:46px;display:flex;align-items:center;justify-content:center;font-size:30px;color:var(--mute)}
+.flow .box.hl{border-color:var(--res);background:color-mix(in srgb,var(--res) 8%,var(--panel))}
+.flow .box.warn{border-color:var(--hot);background:color-mix(in srgb,var(--hot) 10%,var(--panel))}
+/* layer stack (design) */
+.stack{position:absolute;left:48px;top:130px;width:560px}
+.stack .ly{display:flex;align-items:center;gap:16px;height:84px;border-bottom:1.5px solid var(--line)}
+.stack .ly:last-child{border-bottom:0}
+.stack .nm{width:96px;font-size:20px;color:var(--mute)}
+.stack .knob{font-family:var(--mono);font-size:21px;font-weight:500;padding:6px 14px;border-radius:8px;border:2px solid var(--l1);color:var(--ink);background:color-mix(in srgb,var(--l1) 10%,var(--panel))}
+.stack .knob.l0{border-color:var(--l0);background:color-mix(in srgb,var(--l0) 10%,var(--panel))}
+.stack .what{font-size:19px;color:var(--mute)}
+.col{position:absolute;display:flex;flex-direction:column;gap:12px}
+.col ul{margin:0;padding-left:22px;font-size:22px;line-height:1.45}
+.chips{display:flex;flex-wrap:wrap;gap:10px}
+.chips .chip{font-size:17px;padding:4px 12px}
+.chips .chip span{color:var(--mute)}
+/* schedules table (slide 11) */
+.sch{position:absolute;left:48px;top:130px;border-collapse:collapse;font-size:20px}
+.sch th{font-weight:500;color:var(--mute);font-size:15px;letter-spacing:.1em;text-transform:uppercase;text-align:center;padding:0 10px 10px}
+.sch th:first-child{text-align:left}
+.sch td{padding:11px 14px;text-align:center;font-family:var(--mono);font-size:22px}
+.sch td:first-child{font-family:var(--font);font-size:25px;text-align:left;padding-left:0;white-space:nowrap}
+.sch td.w{background:color-mix(in srgb,var(--l1) 16%,var(--panel));border-radius:6px}
+.sch td.g{color:var(--mute)}
+.sch tr.stable td{border-top:2px solid var(--ink);padding-top:14px}
+.sch tr.stable td:first-child{font-weight:600}
+/* conclusion */
+.qa{position:absolute;left:48px;right:48px;top:130px;display:grid;grid-template-columns:330px 1fr;row-gap:0}
+.qa > div{padding:20px 0;border-top:1.5px solid var(--line);font-size:25px;line-height:1.3}
+.qa .q{color:var(--mute);font-size:21px;padding-right:20px}
+.qa .a b{font-weight:600}
+
+/* round-2 additions */
+.flow .box{font-size:28px;font-weight:600;align-items:center;text-align:center}
+.flow .box small{font-size:20px}
+#s6 .ubviz{left:auto;right:48px;top:118px;width:520px;height:560px}
+#s5 .hmviz{left:48px;top:120px;width:578px;height:560px}
+.quote{margin:0;font-size:32px;line-height:1.3;font-weight:500;border-left:5px solid var(--l1);padding:4px 0 4px 22px}
+.quote b{font-weight:700}
+.claim2{margin:8px 0 0;font-size:32px;font-weight:600;line-height:1.2}
+.setup{position:absolute;left:48px;right:48px;top:130px;display:grid;grid-template-columns:200px 1fr;align-items:center}
+.setup > div{padding:16px 0;border-top:1.5px solid var(--line)}
+.setup .k{font-size:15px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}
+.setup .v{font-size:28px;font-weight:500}
+.setup .v b{font-weight:600}
+#s16 .setup{align-items:stretch}
+#s9 .setup{align-items:stretch}
+#s9 .setup .k{display:flex;align-items:center}
+#s16 .setup .k{padding-top:27px}
+.steps{margin:10px 0 0;padding-left:28px;font-size:26px;line-height:1.3;font-weight:500;display:flex;flex-direction:column;gap:8px}
+.card .cl{margin:14px 0 0;padding-left:24px;font-size:24px;line-height:1.3;font-weight:500;display:flex;flex-direction:column;gap:8px}
+.card .ours{position:absolute;left:28px;right:28px;bottom:24px;padding-top:14px;border-top:1.5px solid var(--line);font-size:24px;font-weight:600;line-height:1.3}
+.card .ours .lbl{display:block;color:var(--q);margin-bottom:4px}
+.dsets{display:flex;gap:10px;align-items:flex-start;flex-wrap:nowrap}
+.dgrp{display:flex;flex-direction:column;gap:10px}
+.dtag{font-size:15px;letter-spacing:.12em;text-transform:uppercase;font-weight:600;border-top:3px solid;padding-top:6px}
+.chip i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:8px;vertical-align:middle}
+.impl{position:absolute;left:48px;right:48px;top:140px;display:grid;grid-template-columns:repeat(3,1fr);gap:40px}
+.impl .ih{font-size:30px;font-weight:600;color:var(--ink)}
+.impl ul{margin:18px 0 0;padding-left:24px;font-size:25px;line-height:1.35;display:flex;flex-direction:column;gap:16px}
+.setup .chips .chip{font-size:17px;padding:4px 10px}
+.bul{position:absolute;left:48px;right:96px;top:150px;margin:0;padding-left:30px;font-size:34px;line-height:1.3;display:flex;flex-direction:column;gap:40px}
+.bul b{font-weight:600}
+.sub2{display:block;font-size:22px;color:var(--mute);margin-top:10px;line-height:1.4}
+.foot{position:absolute;left:48px;bottom:40px;margin:0;font-size:18px;color:var(--mute)}
+/* literature approaches per bottleneck */
+.lit{position:absolute;left:48px;right:48px;top:120px;display:grid;grid-template-columns:1fr 420px;column-gap:40px;align-items:center}
+.lit .lh{font-size:15px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);padding-bottom:6px}
+.lit .bn{grid-column:1/-1;font-size:22px;font-weight:600;color:var(--q);padding:30px 0 8px}
+.lit .a,.lit .t{padding:18px 0;border-top:1.5px solid var(--line);align-self:stretch;display:flex;flex-direction:column;justify-content:center}
+.lit .a b{font-size:30px;font-weight:600;line-height:1.2}
+.lit .a .d{font-size:22px;color:var(--mute);margin-top:6px}
+.lit .a .p{font-size:15px;color:var(--mute);margin-top:8px}
+.lit .t{font-size:26px;font-weight:600}
+</style>
+
+<div id="viewport">
+<div id="stage">
+
+<!-- 0. Title -->
+<section class="slide" id="s0">
+  <h1>Wider upper-layer search in HNSW</h1>
+  <div class="who">Carlos Manuel Alfonso Basabe<br>Ernesto Serize Portela</div>
+  <aside class="notes-src">
+    <ul>
+      <li>Topic in one line: HNSW searches its upper layers greedily. We tested whether a wider search there pays off.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- 1. HNSW: layers, build and search (V1) -->
+<section class="slide" id="s1" data-steps="3" data-viz="v1">
+  <h2>HNSW</h2>
+  <div class="caption" style="top:92px"><b>Goal:</b> find the nearest neighbours of a query</div>
+  <div class="points">
+    <div class="grp" data-s="1"><div class="lbl">Build</div>
+      <p>Each point gets a random top layer</p>
+      <p>Connect to nearest neighbours on each layer</p></div>
+    <div class="grp" data-s="2"><div class="lbl">Search</div>
+      <p>Greedy on the upper layers</p>
+      <p>Wide search on layer 0</p></div>
+  </div>
+  <div class="viz" id="viz-v1"></div>
+  <aside class="notes-src">
+    <ul>
+      <li>Nothing runs on its own: press Build / Search / Play to run each step.</li>
+      <li>HNSW: a navigable small-world graph plus the layer idea of skip lists.</li>
+      <li>Build: each point draws its top layer from an exponentially decaying distribution (m_L = 1/ln M, like a skip list with p = 1/M). Upper layers are sparse with long links; layer 0 holds every point.</li>
+      <li>Search: start at the entry point on the top layer; greedy on the upper layers until no neighbour is closer; that local minimum is the entry for the layer below.</li>
+      <li>Layer 0: keep efSearch candidates instead of one path.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- 2. Search on one layer (V2) -->
+<section class="slide" id="s2" data-steps="3" data-viz="v2">
+  <h2>efSearch</h2>
+  <div class="caption"><span data-s="1" data-h="2"><b>ef = 1</b>: greedy, stuck in a local minimum</span><span data-s="2"><b>ef = 8</b>: wider search escapes it</span></div>
+  <div class="viz" id="viz-v2"></div>
+  <aside class="notes-src">
+    <ul>
+      <li>Nothing runs on its own: press Build / Search / Play to run each step.</li>
+      <li>Two sets: candidates to expand (C) and the best ef results so far (W).</li>
+      <li>Expand the closest candidate; stop when it is farther than the worst result.</li>
+      <li>ef = 1 is the greedy search used on the upper layers: it can stop in a local minimum.</li>
+      <li>Larger ef leaves the local minimum: more distance computations, higher recall. This width is the idea we take upward next.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- 3. Width on the upper layers? (V3) -->
+<section class="slide" id="s3" data-steps="3" data-viz="v3">
+  <h2>Width on the upper layers?</h2>
+  <div class="caption"><span data-s="1" data-h="2">Layer 1: a wider search finds a <b>closer entry point</b></span><span data-s="2">Layer 0: same ef0, <b>less work</b> from there</span></div>
+  <div class="viz" id="viz-v3"></div>
+  <aside class="notes-src">
+    <ul>
+      <li>Nothing runs on its own: press Build / Search / Play to run each step.</li>
+      <li>Same two-layer graph twice, layer 1 on top and layer 0 below. Square: where the layer-1 search starts.</li>
+      <li>Step 1. Left: greedy (width 1) stops at a local minimum, far from q. Right: width 4 escapes it, like a wider ef did on the previous slide. The circled node is the entry point for layer 0; the dashed line is its distance to q.</li>
+      <li>A wider layer hands all its results down (the ringed nodes), with their distances; layer 0 starts from all of them.</li>
+      <li>Step 2. Layer 0 runs the same ef0 on both sides. Here: greedy 8 + 21 = 29 distance computations and misses the true nearest; width 4 spends 14 + 9 = 23 and finds it.</li>
+      <li>This is the hypothesis, on a small graph chosen to show it. Click elsewhere to move q: often the entry point does not change and width only adds work. Whether it pays on real data is the question.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- 4. Research question -->
+<section class="slide" id="s4">
+  <div class="kicker">Research question</div>
+  <div class="big">How does a wider <b>efSearch on the upper layers</b> change HNSW's <b>recall–latency trade-off</b>, compared with classic greedy HNSW?</div>
+  <aside class="notes-src">
+    <ul>
+      <li>The proposal's question, reworded without the repetition.</li>
+      <li>Classic HNSW = efSearch 1 (greedy) on every upper layer. We vary only the upper-layer efSearch; the graph and the layer-0 search stay the same.</li>
+      <li>Trade-off, not a single number: we compare cost at the same recall.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- Prior work divider -->
+<section class="slide" id="p0">
+  <div class="kicker">Prior work</div>
+  <div class="big" style="top:190px">What others tried on the upper layers</div>
+  <aside class="notes-src"><ul><li>Prior work: HM-ANN's parallel layer-0 search, Faiss's removed upper_beam, then Down with the Hierarchy and SHG on whether the upper-layer cost is worth it.</li></ul></aside>
+</section>
+
+<!-- 5. Prior work: HM-ANN -->
+<section class="slide" id="s5" data-viz="hm">
+  <h2>HM-ANN: 4 entry points from layer 1</h2>
+  <div class="viz hmviz"></div>
+  <div class="col" style="left:690px;top:140px;width:542px;gap:34px">
+    <div><div class="lbl">Ablation</div><p class="claim2">4 nearest layer-1 entry points</p></div>
+    <div><div class="lbl">Search</div><p class="claim2">Parallel layer-0 searches, ef = 2</p></div>
+    <div><div class="lbl">Outcome</div><p class="claim2">Slightly outperforms HNSW</p></div>
+  </div>
+  <div class="src">HM-ANN author response, NeurIPS 2020</div>
+  <aside class="notes-src">
+    <ul>
+      <li>Reviewers asked the HM-ANN authors for a baseline: plain HNSW, unchanged construction, but with parallel layer-0 search from several layer-1 entry points.</li>
+      <li>The picture: layer 1 keeps its T = 4 nearest nodes; each one starts its own layer-0 search (one thread each, T = 4 as in HM-ANN), and the results are merged.</li>
+      <li>Their verdict, quoted: “HNSW with parallel L0 search only slightly outperforms HNSW.” The interesting part for us: more entry points did move the recall–latency curve, a little.</li>
+      <li>Their explanation: HNSW's layer-1 nodes are chosen at random and are sparse, so the entry nodes found through layer 1 are sub-optimal.</li>
+      <li>Caveat: 4 threads at equal wall-clock time, so about 4× the work. Not the same cost model as ours (one thread, distance computations).</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- 6. Prior work: Faiss upper_beam -->
+<section class="slide" id="s6" data-viz="ub">
+  <h2>FAISS <span class="m" style="font-weight:500">upper_beam</span> implementation</h2>
+  <div class="col" style="left:48px;top:140px;width:600px;gap:34px">
+    <div><div class="lbl">Search</div><p class="claim2">Fixed beam width at every layer</p></div>
+    <div><div class="lbl">Outcome</div><p class="claim2">Removed in the next version: “multiple level-0 entry points showed no improvement”</p></div>
+    <div><div class="lbl">Evidence</div><p class="claim2">No benchmark published</p></div>
+  </div>
+  <div class="viz ubviz"></div>
+  <div class="src">Faiss v1.8.0 HNSW.cpp; issue #3610, PR #3692</div>
+  <aside class="notes-src">
+    <ul>
+      <li>Faiss used to have multi-candidate upper-layer search, the upper_beam parameter.</li>
+      <li>In v1.8.0 with upper_beam &gt; 1, the search loop runs from the top layer down to layer 0 with one candidate heap of capacity upper_beam. Each upper layer keeps its upper_beam best nodes and passes all of them down. Layer 0 is included: its candidate heap is also capped at upper_beam (the result list still uses efSearch). The width cannot be set per layer.</li>
+      <li>It was removed (PR 3692) after a maintainer said his experiments with multiple level-0 entry points showed no improvement (issue 3610). The discussion has no benchmark.</li>
+      <li>Insight: a negative experience, but unmeasured, and with one width coupled across all layers.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- 7. Prior work: is the upper-layer cost worth it? (Down with the Hierarchy, SHG, gap) -->
+<section class="slide" id="s7" data-steps="2">
+  <h2>Is the upper-layer cost worth it?</h2>
+  <div class="card" style="left:48px;top:130px;width:560px;height:380px">
+    <h3>Down with the Hierarchy, 2024</h3>
+    <ul class="cl"><li>Layer 0 is well connected for high-dimensional data</li><li>The hierarchy adds overhead</li></ul>
+    <div class="ours" style="top:240px;bottom:auto"><span class="lbl">Our insight</span>Wider upper-layer search would be less effective</div>
+  </div>
+  <div class="card" style="left:672px;top:130px;width:560px;height:380px">
+    <h3>SHG: Efficient Level Navigation with Shortcuts, 2025</h3>
+    <ul class="cl"><li>Upper layers: <span class="m">18–42%</span> of search latency</li><li>Shortcuts skip upper-layer traversal</li></ul>
+    <div class="ours" style="top:240px;bottom:auto"><span class="lbl">Our insight</span>More upper-layer work has a real cost</div>
+  </div>
+  <div class="gap" data-s="1"><span class="lbl">Gap</span>No controlled study varies upper-layer width with the graph and layer-0 search fixed</div>
+  <aside class="notes-src">
+    <ul>
+      <li>Down with the Hierarchy (2024): on high-dimensional datasets the flat and hierarchical indexes they evaluated had nearly identical recall–latency performance. Their explanation (hub highway hypothesis): a few well-linked hubs in layer 0 already route the search, so the upper layers add little. Insight: extra upper-layer work is least promising exactly where the hierarchy gives little.</li>
+      <li>SHG (PVLDB 2025): upper-layer navigation is 18–42% of search latency in their workloads at recall ≥ 80%. They add shortcuts so a query can skip levels instead of walking every upper layer. Insight: widening the upper layers makes a real cost larger.</li>
+      <li>Step 1, the gap: in the sources we reviewed, nobody varies the upper-layer width and the number of candidates handed down while keeping the graph and the layer-0 search fixed. This is a gap in our review, not proof that no such study exists.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- 8. Prediction -->
+<section class="slide" id="s8" data-steps="2">
+  <h2>Prediction: a slight gain on low-dimensional, hard-to-navigate data</h2>
+  <div class="flow" style="top:150px;height:140px">
+    <div class="box">Wider layer 1</div>
+    <div class="arr">→</div>
+    <div class="box">Closer entry point</div>
+    <div class="arr">→</div>
+    <div class="box">Less layer-0 work</div>
+  </div>
+  <svg data-s="1" style="position:absolute;left:48px;top:330px" width="1184" height="330" viewBox="0 0 1184 330" role="img" aria-label="Balance: extra layer-1 work against layer-0 work saved">
+    <path d="M592 300 L560 330 L624 330 Z" fill="var(--ink)"/>
+    <line x1="252" y1="300" x2="932" y2="300" stroke="var(--ink)" stroke-width="5" stroke-linecap="round"/>
+    <rect x="182" y="150" width="140" height="146" rx="6" fill="none" stroke="var(--ink)" stroke-width="3" stroke-dasharray="9 6"/>
+    <rect x="862" y="150" width="140" height="146" rx="6" fill="var(--l0)"/>
+    <text x="252" y="128" text-anchor="middle" font-size="26" font-weight="600" fill="var(--ink)">extra layer-1 work</text>
+    <text x="932" y="128" text-anchor="middle" font-size="26" font-weight="600" fill="var(--ink)">layer-0 work saved</text>
+    <text x="592" y="200" text-anchor="middle" font-size="30" font-weight="600" fill="var(--ink)">Better trade-off only if</text>
+    <text x="592" y="244" text-anchor="middle" font-size="30" font-weight="600" fill="var(--hot)">saved &gt; extra</text>
+  </svg>
+  <aside class="notes-src">
+    <ul>
+      <li>Prediction (outline): a small width increase on the layers near layer 0 can slightly improve the recall–latency trade-off, lower latency at the same recall, on low-dimensional datasets with some complex geometry. (The proposal says ≤ 96 dimensions.)</li>
+      <li>Why: layer-1 results are the layer-0 entry points. A study of graph search (arXiv 2502.05575) found that the entry-point strategy changed the distance computations needed at the same accuracy. HM-ANN: several layer-1 entry points helped slightly.</li>
+      <li>Step 1, the balance: the chain only pays if the layer-0 work saved outweighs the extra layer-1 work. Same encoding as in the results: dashed = extra layer-1 work, blue = layer-0 work saved. The results check the chain: the trade-off, the entry point, how much layer 0 reacts, then the balance.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- 9. Experimental setup -->
+<section class="slide" id="s9" data-steps="6">
+  <h2>Experimental setup</h2>
+  <div class="setup">
+    <div class="k">Metric</div><div class="v">Recall@10 vs latency · distance computations</div>
+    <div class="k" data-s="1">Baseline</div><div class="v" data-s="1">Classic HNSW: greedy upper layers (ef = 1)</div>
+    <div class="k" data-s="2">Data</div><div class="v" data-s="2"><div class="dsets">
+      <div class="dgrp"><div class="chips"><span class="chip"><i style="background:var(--cand)"></i>Deep1M <span>96-d</span></span><span class="chip"><i style="background:var(--l2)"></i>GloVe-25 <span>25-d</span></span></div><div class="dtag" style="color:var(--res);border-color:var(--res)">real data</div></div>
+      <div class="dgrp"><div class="chips"><span class="chip"><i style="background:var(--q)"></i>Clustered <span>200k · 16-d</span></span></div><div class="dtag" style="color:var(--q);border-color:var(--q)">synthetic</div></div></div></div>
+    <div class="k" data-s="3">Fixed</div><div class="v" data-s="3">Same index · queries · ef0 grid 10–512</div>
+    <div class="k" data-s="4">Varied</div><div class="v" data-s="4">ef on the upper layers</div>
+    <div class="k" data-s="5">Repeated</div><div class="v" data-s="5">5 graph seeds</div>
+  </div>
+  <aside class="notes-src">
+    <ul>
+      <li>Metric first: recall@10 against mean query latency (ms per query, one thread), and distance computations as a latency proxy, recorded per layer by our Faiss fork.</li>
+      <li>Baseline: classic HNSW, greedy (ef = 1) on every upper layer, on the very same index.</li>
+      <li>Data: real (Deep1M 96-d), GloVe-25 (cosine), and clustered synthetic 200k points with 200 clusters at d = 16.</li>
+      <li>Fixed: build parameters (M = 32, efConstruction = 100), queries, ground truth, k = 10. Layer-0 efSearch is swept (10 to 512 on the 1M sets, 10 to 120 on the clustered sets), so each configuration gives a recall–cost curve and we compare curves at the same recall.</li>
+      <li>Varied: the efSearch of the upper layers. Repeated over 5 graph seeds (Deep1M) or 10 (GloVe-25, clustered). Details of the controls are in the extra section.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- Results divider -->
+<section class="slide" id="d1">
+  <div class="big" style="top:290px;text-align:center;font-size:80px;font-weight:600">Results</div>
+  <aside class="notes-src"><ul><li>Results: first the latency–recall trade-off, then why it does not improve.</li></ul></aside>
+</section>
+
+<!-- 11. Results: tradeoff at matched recall (R1) -->
+<section class="slide" id="s12" data-steps="4" data-viz="r1">
+  <h2>Latency–recall trade-off</h2>
+  <div class="viz" id="viz-r1"></div>
+  <aside class="notes-src">
+    <ul>
+      <li>Each panel: % change in cost versus standard HNSW (the 0 line) at the same recall@10, across the ef0 sweep. One line per layer-1 width; each point is one ef0, recall matched on the same seed's standard curve, then averaged across graph seeds. Toggle: latency or total distance computations. Same y-axis on all three panels.</li>
+      <li>Step 0, Deep1M: wider costs more at almost every recall (width 8 up to +12% latency), and the extra cost shrinks toward 0 at high recall. The dip at recall 0.75 (ef0 = 10) is noisy.</li>
+      <li>Step 1, GloVe-25: same shape, stronger. Width 8 is +29% at low recall, still +1–3% near recall 0.999.</li>
+      <li>Step 2, clustered 16-d: the only panel that goes below 0. The saving grows with recall (about −18% latency at recall ≈ 0.999 for widths 4 and 8); width 8 is costlier at low recall. Only three ef0 values (≤ 52) on the clustered set.</li>
+      <li>Step 3: all three side by side. Real data never drops below standard; clustered does, at high recall.</li>
+      <li>Transition: widening spends more work on real data. Does it at least find better entry points?</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- Why divider -->
+<section class="slide" id="d2">
+  <div class="big" style="top:270px;text-align:center;font-size:60px;font-weight:600">Why does the trade-off not improve?</div>
+  <aside class="notes-src"><ul><li>The next slides follow the prediction chain: does a wider layer 1 give a closer entry point, how much layer-0 work does that save, and does the saving repay the extra layer-1 work?</li></ul></aside>
+</section>
+
+<!-- 12. Results: entry-point gain (R2) -->
+<section class="slide" id="s13" data-steps="3" data-viz="r2">
+  <h2>Entry-point improvement distribution</h2>
+  <div class="viz" id="viz-r2"></div>
+  <aside class="notes-src">
+    <ul>
+      <li>How to read it: each curve is the distribution of how much closer to q the entry point into layer 0 got, compared with standard on the same graph and query. Smoothed histogram on a log x axis: the height is the share of ALL queries per 0.2-decade bin (15 bins from 0.1% to 100%), lightly smoothed with a Gaussian kernel. Same unit as a 15-bin bar histogram. (The earlier curve showed share per decade, 5x larger, which is why its peak read about 50%.) Queries whose entry point did not change are not drawn (the side panel gives the share that changed). Seeds pooled. Datasets appear one per click: Deep1M (96-d), GloVe-25 (25-d), then clustered 16-d. The dashed threshold line (default ≥ 10% closer, the gain discussed on the next slides) is on from the start; the shaded part right of it is the share at least that much closer, and the side panel gives that share. Click a dataset on the right to hide or show it.</li>
+      <li>Steps 0–2, width 4: the entry point changes for 48% (Deep1M) and 50% (GloVe-25), but only 30% on clustered. Real data: the mass sits at small gains, a few % closer. Clustered: less mass overall, but a second bump at 30–100% closer.</li>
+      <li>Threshold: at least 10% closer (default): Deep 19.7%, GloVe 27.8%, clustered 16.2%. At least 30% closer: Deep 1.3%, GloVe 3.4%, clustered 4.3%. At 50%: real data ≤ 0.25%, clustered 3.2%. Clustered: a tail of very large improvements. Real data: many small ones.</li>
+      <li>Transition: most real-data gains are small. How much layer-0 work does a small gain buy?</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- 13. Insight: layer 0 barely reacts -->
+<section class="slide" id="s13b" data-viz="sens">
+  <h2>Layer 0 searches well without the better entry point</h2>
+  <div class="viz" id="viz-sens"></div>
+  <aside class="notes-src">
+    <ul>
+      <li>For each query we measured how much layer-0 work it saved against how much closer its entry point got, and fitted the slope: % layer-0 work saved per 10% closer entry point (seed mean, 95% t interval; all queries and widths pooled).</li>
+      <li>Deep1M: 9% at ef0 = 10, but 2.7% at ef0 = 52 (recall ≈ 0.95) and 0.2% at ef0 = 512. Layer 0 repairs a mediocre entry point by itself, and the wider its own search, the less the start matters.</li>
+      <li>The typical changed query on Deep1M gets an entry point about 8% closer (median, width 4). At recall 0.95 that buys about 2% less layer-0 work, while the widened layer 1 always pays its extra work.</li>
+      <li>Clustered: the slope is flatter (1.3–2%), so small gains buy even less there. The clustered win must come from the few queries whose entry point gets 40–90% closer. GloVe-25 (run 4, same fit): 7.4% at ef0 = 10, 2.0% at ef0 = 52, 0.13% at ef0 = 512, close to Deep1M. Typical gain if asked: the median changed query on Deep1M gets an entry point about 8% closer (width 4), which at ef0 = 52 buys about 2.2% less layer-0 work.</li>
+      <li>Transition: so does the saved work ever repay the extra layer-1 work?</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- 14. Results: cost balance (R3) -->
+<section class="slide" id="s14" data-steps="4" data-viz="r3">
+  <h2>Net layer-0 cost saved per entry-point quality bin</h2>
+  <div class="viz" id="viz-r3"></div>
+  <aside class="notes-src">
+    <ul>
+      <li>Width 4, matched recall 0.95 on all three datasets. Queries are binned by how much closer the wider layer 1 brought their layer-0 entry point: unchanged, then the changed queries split into three equal thirds (bin edges differ per dataset).</li>
+      <li>Bar: layer-0 distance computations saved per query, at the same recall. Black tick: the extra layer-1 distance computations the wider search spent. Right column: net = saved − extra.</li>
+      <li>Read it: on GloVe-25 and Deep1M no bin clears its extra layer-1 work, not even the 12–88% closer bin (about 70 saved vs 105–114 spent). On clustered, the top bin saves 159 vs 42 spent, net +117 per query; every other bin is negative.</li>
+      <li>Other recall targets give the same picture; the clustered top bin grows with recall (net +117 at 0.95, +175 at 0.98, +240 at 0.995).</li>
+      <li>Only Deep1M, GloVe-25 and clustered d = 16 have per-query recall, needed to match recall within a bin. Distance computations saved are not latency saved; several savings intervals are wide at high recall.</li>
+      <li>Transition: so who carries the clustered saving?</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- 16. Conclusion -->
+<section class="slide" id="s15" data-steps="3">
+  <h2>Conclusion</h2>
+  <p style="position:absolute;left:48px;right:96px;top:140px;margin:0;font-size:36px;line-height:1.3;font-weight:600;text-wrap:balance">Wider upper-layer search worsens latency–recall trade-off on real data</p>
+  <div style="position:absolute;left:48px;top:280px;font-size:30px;font-weight:600;color:var(--q)">Bottlenecks</div>
+  <ol class="bul" style="top:340px;gap:44px">
+    <li data-s="1"><b>Layer 0 insensitive to entry point</b><span class="sub2" style="font-size:26px;color:var(--ink)">Better start saves little work, less as ef0 grows</span></li>
+    <li data-s="2"><b>Upper-layer cost buys only marginal entry gains</b><span class="sub2" style="font-size:26px;color:var(--ink)">Cost grows linearly with width, gains saturate</span></li>
+  </ol>
+  <aside class="notes-src">
+    <ul>
+      <li>Answer: on Deep1M and GloVe-25, widths 2/4/8 need about +0.8%, +2.7–2.9% and +6.3–6.4% more distance computations at the same recall (95% CIs exclude 0). Clustered data is the exception (−2% to −5%).</li>
+      <li>Bottleneck 1: the share of layer-0 work saved per 10% closer entry falls roughly as 1/ef0 (fitted exponent about −1.0 on Deep1M). It is 9–12% at ef0=10, at most 3.4% for ef0 ≥ 52, and under 1% for ef0 ≥ 182. Clustered d=16 decays much more slowly (about ef0^−0.2).</li>
+      <li>Bottleneck 2: extra layer-1 work grows linearly with width (Deep1M +23, +61, +118 distances per query at w=2/4/8). The share of queries with a closer entry saturates (28% → 48% → 59%), and the median gain of an improved entry stays near 9% at every width. Layer-0 saving per extra upper distance at recall 0.95 falls 0.41 → 0.30 → 0.21 (Deep1M), 0.48 → 0.32 → 0.22 (GloVe-25); break-even is 1.</li>
+      <li>Where width pays: clustered data, where upper-layer cost is tiny and a tail of large gains carries the saving (10% of queries carry 80% of it; at recall 0.95 the clustered net is only break-even, positive from 0.98). Next step: spend extra upper-layer work only on queries that look stuck. Bounded to the tested datasets, widths and the layer-1 schedule.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- 17. Literature approaches per bottleneck -->
+<section class="slide" id="s16" data-steps="6">
+  <h2>Approaches in the literature</h2>
+  <div class="lit">
+    <div></div><div class="lh" data-s="1">Trades away</div>
+    <div class="bn">Bottleneck 1 · Layer 0 insensitive to entry point</div>
+    <div class="a"><b>Skip the hierarchy, start layer 0 at the nearest cluster centroid</b><span class="p">Down with the Hierarchy · Oguri &amp; Matsui</span></div>
+    <div class="t" data-s="1">Low-dimension speed-up lost</div>
+    <div class="bn" data-s="2">Bottleneck 2 · Upper-layer cost buys marginal entry gains</div>
+    <div class="a" data-s="2"><b>Do wider search only for hard queries</b><span class="d">Estimate the width needed for the target recall</span><span class="p">Ada-ef</span></div>
+    <div class="t" data-s="3">Per-query estimation overhead</div>
+    <div class="a" data-s="4"><b>Build the upper layers from hubs</b><span class="p">HM-ANN</span></div>
+    <div class="t" data-s="5">Small clusters left uncovered</div>
+  </div>
+  <aside class="notes-src">
+    <ul>
+      <li>Published approaches, grouped by the bottleneck from the previous slide that they attack, each with what it gives up.</li>
+      <li>Bottleneck 1, skip the hierarchy: if layer 0 repairs a mediocre entry anyway, the upper descent is mostly cost. Down with the Hierarchy runs HNSW's layer 0 alone with the same greedy search: same latency as HNSW on high-dimensional data, about 38% less peak memory at build. The hierarchy still helps at low dimension (Lin &amp; Zhao 2019: about 2x at d = 4, no difference by d = 32), which is what is traded away.</li>
+      <li>Entry without the hierarchy: Oguri &amp; Matsui keep a fixed pool of k-means centroids and start each query at its nearest one. Costs K distances per query; 1.2–2.3x QPS on NSG and DiskANN over eight 1M datasets, largest on clustered Gaussian data. (Azizi et al.: the best of K random nodes did as well as HNSW's upper layers up to 100 GB.)</li>
+      <li>Bottleneck 2, wider search only for hard queries: every query pays the extra width, few gain, so spend it only where it pays. Ada-ef (Zhang &amp; Miller, SIGMOD 2026), training-free: offline it stores the data's mean and covariance, so a query's distances to the data are modelled as a Gaussian. Online it computes the distances within 2 hops of the layer-0 entry, scores where they fall in that Gaussian, and maps the score to the ef needed for the target recall with a table built from about 200 sample queries. Caveat: Ada-ef adapts the layer-0 width; applying it to the upper layers would be our extension.</li>
+      <li>Related: DARTH (SIGMOD 2026) instead calls a LightGBM model periodically during the layer-0 search on 11 runtime features, predicts the recall reached so far, and stops at the target; about 0.03 ms per call, trained per dataset, 13% of DEEP100M queries miss the target. The overhead of such estimates is what is traded away.</li>
+      <li>Bottleneck 2, hubs: layer 1 is a random 1/M sample, so the layer-1 search pays a lot for a good entry. HM-ANN builds the upper layers from the highest-degree layer-0 nodes: 1.8–4.3x faster than random promotion at 95–99.5% recall, but with a larger, denser layer 1 and on Optane memory, so hub selection alone is untested. Trade-off: hubs sit near cluster centres, so small and edge clusters may get no upper-layer node.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- Extra section -->
+<section class="slide" id="x0">
+  <div class="big" style="top:290px;text-align:center;font-size:80px;font-weight:600">Extra</div>
+  <aside class="notes-src"><ul><li>Backup slides for questions about how the experiments were built and run.</li></ul></aside>
+</section>
+
+<section class="slide" id="x1">
+  <h2>Implementation: one ef per layer in Faiss</h2>
+  <div class="impl">
+    <div class="ic"><div class="ih">Reused</div><ul><li>Faiss greedy descent for layers with ef = 1</li><li>Faiss layer-0 beam search for layers with ef &gt; 1</li></ul></div>
+    <div class="ic"><div class="ih">Added</div><ul><li>One ef per layer in the search parameters</li><li>Whole beam handed down, with distances</li><li>Distance counts per layer</li></ul></div>
+    <div class="ic"><div class="ih">Parity checks</div><div class="sub" style="margin-top:6px">Unit tests, synthetic 16-d clustered data</div><ul><li>Greedy settings: identical results and distance counts to stock Faiss</li><li>Full-width descent: distance counts exact</li></ul></div>
+  </div>
+  <aside class="notes-src">
+    <ul>
+      <li>A per-layer efSearch list in SearchParametersHNSW; search_impl changed.</li>
+      <li>Upper layer with ef = 1: the existing greedy search (greedy_update_nearest_impl). Upper layer with ef &gt; 1: the layer-0 search routine (search_from_candidates_dispatch) with that layer's ef.</li>
+      <li>All results of a layer seed the next layer, distances carried over.</li>
+      <li>We count distance computations per layer.</li>
+      <li>Parity tests (tests/test_hnsw_per_layer_efsearch.py) run on a 16-d Gaussian mixture: 5,000 points, 50 clusters, M = 8, 200 queries, so the upper levels have local minima.</li>
+      <li>Greedy settings: ef = 1 on every upper layer, an empty ef list, a short list, and widths 0 or −1, each at ef0 = 16 and 64. Results (ids and distances) and the distance and hop counts are identical to stock Faiss.</li>
+      <li>Full-width descent: with a width larger than each layer, the beam visits every reachable node; the counted upper-layer distances match a reference descent exactly, and layer 0 seeded with that whole set gives the same results. This would catch a visited table that is not reset between layers.</li>
+      <li>Statistics: recording per-layer statistics leaves results unchanged, the per-layer counts sum to Faiss's totals, and the recorded hand-down sets are checked.</li>
+    </ul>
+  </aside>
+</section>
+
+<section class="slide" id="x2">
+  <h2>Controls</h2>
+  <div class="lbl" style="position:absolute;left:48px;top:118px">Every configuration</div>
+  <div class="flow" style="top:146px;height:120px">
+    <div class="box">Own process</div>
+    <div class="arr">→</div>
+    <div class="box">Warm-up pass</div>
+    <div class="arr">→</div>
+    <div class="box">3 timed passes<small>1 thread</small></div>
+    <div class="arr">×</div>
+    <div class="box">5 graph seeds</div>
+    <div class="arr">→</div>
+    <div class="box">Mean, 95% CI</div>
+  </div>
+  <div class="lbl" style="position:absolute;left:48px;top:306px">How the 95% intervals are computed</div>
+  <div class="setup" style="top:336px;grid-template-columns:230px 1fr;align-items:stretch">
+    <div class="k" style="display:flex;align-items:center">Seeds</div><div class="v" style="font-size:25px">Mean of the per-seed values ± t·s/√n</div>
+    <div class="k" style="display:flex;align-items:center">Queries</div><div class="v" style="font-size:25px">Bootstrap over query ids, same ids for widened and standard</div>
+    <div class="k" style="display:flex;align-items:center">Seeds × queries</div><div class="v" style="font-size:25px">Bootstrap over seeds, then over queries</div>
+  </div>
+  <aside class="notes-src">
+    <ul>
+      <li>Each configuration ran as its own process.</li>
+      <li>Timing: one warm-up pass, then three timed passes over all queries, single search thread, query batches of 200.</li>
+      <li>Seeds change the graph only; data and queries are fixed per dataset. 5 seeds on Deep1M, 10 on GloVe-25 and the clustered sets.</li>
+      <li>Recall and distance counts are deterministic for a given graph; only latency is noisy. Curves and summaries are seed means with 95% t intervals across seeds.</li>
+      <li>Seed interval: compute the number on each seed separately (each seed has its own standard curve for matched recall), then mean ± t(0.975, n−1)·sd/√n; with 5 seeds t = 2.78. It covers another build of the graph, and also process-to-process timing noise, since every seed is a separate process. With 5 seeds a sign test can at best give p = 0.0625 (all 5 agree), so the t interval is the test we use.</li>
+      <li>The query set is the same on every seed, so the seed interval does not include which queries were drawn. Query bootstrap: resample the query ids with replacement, the same ids for the widened run, its standard twin and every seed (paired), and recompute recall, distance counts and the matched-recall comparison.</li>
+      <li>Two-level bootstrap: each replicate resamples the seeds, then the query ids, and recomputes everything; 2.5 and 97.5 percentiles of 1,000 replicates. Width 4, distance computations at matched recall: Deep1M [2.4, 3.2] vs seed t [2.3, 3.4]; clustered d = 16 [−6.9, −2.7] vs [−7.0, −3.1]; GloVe-25 [2.3, 3.0] vs [2.4, 3.0]. So the seed interval already has about the right width.</li>
+      <li>Limits: query bootstrap needs per-query recall, which exists for Deep1M, GloVe-25 and clustered d = 16 only. Latency is timed per batch of 200 queries, so latency intervals cover seeds only. One machine per dataset: no interval covers another machine.</li>
+      <li>GloVe-25 ran on a different machine, so latency is compared within a dataset, not across.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- 10. Exploration runs -->
+<section class="slide" id="s10">
+  <h2>Exploration runs</h2>
+  <table class="sch" aria-label="Upper-layer width schedules" style="top:140px">
+    <tr><th>schedule</th><th>layer 3</th><th>layer 2</th><th>layer 1</th></tr>
+    <tr><td>standard</td><td class="g">1</td><td class="g">1</td><td class="g">1</td></tr>
+    <tr><td>layer 1 only</td><td class="g">1</td><td class="g">1</td><td class="w">ef₀·r</td></tr>
+    <tr><td>decaying upward</td><td class="w">ef₀·r³</td><td class="w">ef₀·r²</td><td class="w">ef₀·r</td></tr>
+    <tr><td>same width everywhere</td><td class="w">w</td><td class="w">w</td><td class="w">w</td></tr>
+    <tr><td>fixed</td><td class="g">1</td><td class="w">4</td><td class="w">8</td></tr>
+  </table>
+  <div class="col" style="left:760px;top:150px;width:472px;gap:34px">
+    <div><p class="line" style="margin:0">2 graph seeds per dataset</p></div>
+    <div><p class="line" style="margin:0"><b>Worse recall–latency trade-off</b> on every dataset</p></div>
+    <div><p class="line" style="margin:0">Next: width on <b>layer 1 only</b>, with more graph seeds</p></div>
+  </div>
+  <aside class="notes-src">
+    <ul>
+      <li>One graph each: SIFT1M, Deep1M, Gaussian synthetic, clustered synthetic 50k at d = 2, 8, 16, 32.</li>
+      <li>Schedules: layer 1 only with ef₁ = ef₀·r; exponential decay ef_l = ef₀·r^l; a constant width w on every upper layer (2, 4, 8, 16); a hand-picked (8, 4, 1). r = r_mult / M, with M the graph degree.</li>
+      <li>Message: consistently, wider upper-layer search gave a worse recall–latency trade-off. On the 1M sets the overhead grew with width (Deep1M, width on all layers: +0.9% / +3.5% / +8.2% / +16.1% distance computations for w = 2/4/8/16). The clustered 50k sets used fewer distance computations, but no latency win survived, and most of that gain came from upper-level work the stock greedy wastes, not from better entry points.</li>
+      <li>So the main runs widen only layer 1 (w = 2, 4, 8): this isolates the entry-point effect. More graph seeds give confidence intervals.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- 15. Insight: who carries the clustered saving -->
+<section class="slide" id="s14b" data-viz="impact">
+  <h2>Clustered: one in ten queries carries the saving</h2>
+  <div class="viz" id="viz-impact"></div>
+  <aside class="notes-src">
+    <ul>
+      <li>Same width-4 groups as before, now weighted by how many queries each group holds. Pink: the largest-gain group (the top third of the changed queries). Matched recall 0.95 on all three datasets, as on the previous slide.</li>
+      <li>All numbers are computed per graph seed, then averaged; small text = 95% t interval across seeds (10 seeds clustered and GloVe-25, 5 Deep1M).</li>
+      <li>Clustered d = 16: the largest-gain group is 10% of the queries but 80% (77–84%) of all layer-0 work saved. With them, the whole query set nets about +3 distance computations per query (19.9 saved vs 17.3 extra), but the interval is −1 to +6 and 8 of 10 seeds are positive: say break-even, not a win. Without them it loses about 9, on every seed. At recall 0.98 the group carries 85% and the net is +8.5 (+3.6 to +13.5, 9 of 10 seeds positive), so the saving does become real at higher recall.</li>
+      <li>Real data: the largest-gain group is about 16–17% of queries and 53–63% of the saving, and the net stays around −42 (Deep1M, −46 to −39) and −46 (GloVe-25, −48 to −44) per query, negative on every seed. Their big gains are too rare and too small.</li>
+      <li>Why clustered: in the exploration runs we traced these queries. For about 1% of clustered queries (d ≥ 16) the greedy descent ends in the wrong cluster; the wider layer 1 finds the right one, about 19× closer, and those few queries carried most of the layer-0 saving. On Deep and SIFT no query got stuck in a far cluster.</li>
+      <li>Also: the extra layer-1 work is much smaller on clustered (17 per query at width 4, vs 61 on Deep1M and 68 on GloVe-25), so there is less to repay.</li>
+    </ul>
+  </aside>
+</section>
+
+<div id="pop" role="tooltip"></div>
+<div class="nav"><button id="prev" aria-label="Previous">‹</button><span id="counter"></span><button id="next" aria-label="Next">›</button></div>
+</div>
+</div>
+<div id="notes" aria-live="polite"></div>
+
+<script>
+/* Visualization contract. Each viz file calls
+     VIZ.register(id, { mount(el, api) -> { step(n)?, destroy()? } })
+   el is a 1184x590 box. api.explain(target, text) attaches a pop-up (or use data-explain).
+   The deck calls step(n) when the presenter moves through the slide's steps (0 = first view). */
+window.VIZ = { defs:{}, register(id, def){ this.defs[id]=def; } };
+</script>
+<script src="viz/v1-hnsw.js" charset="utf-8"></script>
+<script src="viz/v2-search-layer.js" charset="utf-8"></script>
+<script src="viz/v3-upper-width.js" charset="utf-8"></script>
+<script src="viz/v4-prior.js" charset="utf-8"></script>
+<script src="data/sensitivity.js" charset="utf-8"></script>
+<script src="data/results.js" charset="utf-8"></script>
+<script src="data/intervals.js" charset="utf-8"></script>
+<script src="viz/r-results.js" charset="utf-8"></script>
+<script>
+(function(){
+const $=id=>document.getElementById(id);
+const slides=[...document.querySelectorAll('.slide')];
+const stage=$('stage'), pop=$('pop');
+let cur=0, step=0;
+const inst={};
+
+function explainShow(t){
+  pop.textContent=t.getAttribute('data-explain'); pop.classList.add('on');
+  const sr=stage.getBoundingClientRect(), s=sr.width/1280, r=t.getBoundingClientRect();
+  let x=(r.left-sr.left)/s, y=(r.bottom-sr.top)/s+10;
+  const w=pop.offsetWidth, h=pop.offsetHeight;
+  if(x+w>1260)x=1260-w; if(y+h>705)y=(r.top-sr.top)/s-h-10; if(y<5)y=5;
+  pop.style.left=x+'px'; pop.style.top=y+'px';
+}
+// No pop-ups on controls (Carlos, 2026-11-14): buttons, sliders and other inputs never explain themselves.
+const isControl=t=>t.closest('button,input,select,label,.ctl');
+stage.addEventListener('mouseover',e=>{const t=e.target.closest('[data-explain][data-keep]'); if(t&&!isControl(t))explainShow(t);});
+stage.addEventListener('mouseout',e=>{if(e.target.closest('[data-explain]'))pop.classList.remove('on');});
+const api={ explain(el,text){ el.setAttribute('data-explain',text); } };
+
+function mountViz(s){
+  const id=s.dataset.viz; if(!id||inst[id]!==undefined)return;
+  const def=VIZ.defs[id], el=s.querySelector('.viz');
+  try{ inst[id]=def?def.mount(el,api)||{}:null; if(!def)el.textContent='Visualization '+id+' not loaded.'; }
+  catch(err){ inst[id]=null; el.textContent='Visualization '+id+' failed: '+err.message; console.error(err); }
+}
+function render(){
+  slides.forEach((s,i)=>s.classList.toggle('active',i===cur));
+  const s=slides[cur]; mountViz(s);
+  s.querySelectorAll('[data-s]').forEach(e=>e.classList.toggle('on',step>=+e.dataset.s&&!(e.dataset.h&&step>=+e.dataset.h)));
+  const v=inst[s.dataset.viz]; if(v&&v.step)v.step(step);
+  $('counter').textContent=(cur+1)+' / '+slides.length;
+  const src=s.querySelector('.notes-src'); $('notes').innerHTML='<h4>Say</h4>'+(src?src.innerHTML:'');
+  try{history.replaceState(null,'','#'+(cur+1)+(step?'.'+step:''))}catch(e){}
+}
+function next(){const v=inst[slides[cur].dataset.viz];
+  if(v&&v.busy&&v.busy()){v.finish();return;}
+  if(v&&v.pending&&v.pending()){v.play();return;}
+  const n=+slides[cur].dataset.steps||1; if(step<n-1)step++; else if(cur<slides.length-1){cur++;step=0;} render();}
+function prev(){if(step>0)step--; else if(cur>0){cur--;step=(+slides[cur].dataset.steps||1)-1;} render();}
+document.addEventListener('keydown',e=>{
+  if(e.target.closest('input,textarea,select'))return;
+  if(['ArrowRight','PageDown',' '].includes(e.key)){e.preventDefault();next();}
+  else if(['ArrowLeft','PageUp'].includes(e.key)){e.preventDefault();prev();}
+  else if(e.key==='Enter'){ // Enter = the visualization's Step button (one action), else its main button
+    const vis=b=>b&&b.offsetParent&&getComputedStyle(b).visibility!=='hidden'&&!b.disabled;
+    const bs=[...slides[cur].querySelectorAll('button.ctl')];
+    const b=bs.find(x=>/^step$/i.test(x.textContent.trim())&&vis(x))||bs.find(x=>x.classList.contains('primary')&&vis(x));
+    if(b){e.preventDefault();b.click();}}
+  else if(e.key==='n'||e.key==='N'){$('notes').classList.toggle('on');}
+  else if(e.key==='f'){document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen?.().catch(()=>{});}
+});
+$('next').addEventListener('click',next); $('prev').addEventListener('click',prev);
+function fit(){const v=$('viewport');const s=Math.min(v.clientWidth/1280,v.clientHeight/720);stage.style.transform=`translate(-50%,-50%) scale(${s})`;}
+window.addEventListener('resize',fit); fit();
+const m=location.hash.match(/^#(\d+)(?:\.(\d+))?/);
+if(m){cur=Math.min(slides.length-1,Math.max(0,+m[1]-1));step=Math.min(+(m[2]||0),(+slides[cur].dataset.steps||1)-1);}
+render();
+})();
+</script>
+
+</body></html>
